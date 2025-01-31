@@ -16,15 +16,15 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 
 // Grid configuration
-const gridSize = 32;
+const gridSize = 64; // Increased for more detail
 const geometry = new THREE.PlaneGeometry(15, 15, gridSize - 1, gridSize - 1);
 const material = new THREE.MeshPhongMaterial({
     vertexColors: true,
     wireframe: false,
     flatShading: true,
-    emissive: 0x444444,
-    specular: 0x222222,
-    shininess: 100
+    emissive: 0x222222,
+    specular: 0x444444,
+    shininess: 50
 });
 
 const grid = new THREE.Mesh(geometry, material);
@@ -50,6 +50,7 @@ camera.lookAt(0, 0, 0);
 let audioContext, analyser, dataArray, audioBuffer, source;
 const targetHeights = new Float32Array(gridSize * gridSize);
 const audioInput = document.getElementById('audioInput');
+let maxFrequency = 1; // For normalization
 
 // File input handler
 audioInput.addEventListener('change', function(e) {
@@ -70,7 +71,7 @@ audioInput.addEventListener('change', function(e) {
 
 function setupAudioAnalyser() {
     analyser = audioContext.createAnalyser();
-    analyser.fftSize = 512; // Higher resolution
+    analyser.fftSize = 1024; // Even higher resolution
     dataArray = new Uint8Array(analyser.frequencyBinCount);
 }
 
@@ -92,19 +93,30 @@ function updateGrid() {
     const vertices = grid.geometry.attributes.position.array;
     const colors = grid.geometry.attributes.color.array;
 
+    // Find max frequency for normalization
+    maxFrequency = Math.max(...dataArray);
+
     // Update target heights and colors
     for (let i = 0; i < gridSize * gridSize; i++) {
-        const dataIndex = Math.floor(i / (gridSize * gridSize) * dataArray.length);
-        targetHeights[i] = (dataArray[dataIndex] / 256) * 2; // Amplify the effect
+        const x = i % gridSize;
+        const y = Math.floor(i / gridSize);
+        const dataIndex = Math.floor((x + y) / (2 * gridSize) * dataArray.length);
+        
+        // Normalize and amplify the effect
+        const normalizedHeight = (dataArray[dataIndex] / maxFrequency) * 3;
+        targetHeights[i] = normalizedHeight;
+
+        // Pixelate effect: round height to nearest 0.5
+        const pixelatedHeight = Math.round(normalizedHeight * 2) / 2;
 
         // Smooth height transition
-        vertices[i * 3 + 2] += (targetHeights[i] - vertices[i * 3 + 2]) * 0.15;
+        vertices[i * 3 + 2] += (pixelatedHeight - vertices[i * 3 + 2]) * 0.2;
 
-        // Color mapping based on height
+        // Color mapping based on height with more vibrant colors
         const heightFactor = vertices[i * 3 + 2] / 3;
-        colors[i * 3] = 0.2 + heightFactor; // Red
-        colors[i * 3 + 1] = 0.3 - heightFactor * 0.5; // Green
-        colors[i * 3 + 2] = 0.5 + heightFactor; // Blue
+        colors[i * 3] = Math.sin(heightFactor * Math.PI) * 0.5 + 0.5; // Red
+        colors[i * 3 + 1] = Math.sin((heightFactor + 0.33) * Math.PI) * 0.5 + 0.5; // Green
+        colors[i * 3 + 2] = Math.sin((heightFactor + 0.66) * Math.PI) * 0.5 + 0.5; // Blue
     }
 
     grid.geometry.attributes.position.needsUpdate = true;
