@@ -138,13 +138,16 @@ audioInput.addEventListener('change', function(e) {
     const file = e.target.files[0];
     const reader = new FileReader();
 
-    reader.onload = async function(e) {
+    reader.onload = function(e) {
+        const arrayBuffer = e.target.result;
+        if (audioContext) audioContext.close();
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const arrayBuffer = await reader.result;
         audioContext.decodeAudioData(arrayBuffer, function(buffer) {
             audioBuffer = buffer;
             setupAudioAnalyser();
             playAudio();
+        }, function(e) {
+            console.error("Error decoding audio data", e);
         });
     };
     reader.readAsArrayBuffer(file);
