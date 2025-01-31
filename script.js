@@ -14,7 +14,7 @@ grid.rotation.x = -Math.PI / 2;
 
 scene.add(grid);
 
-camera.position.set(0, 5, 10);
+camera.position.set(0, 10, 10);
 camera.lookAt(0, 0, 0);
 
 let audioContext, analyser, dataArray;
