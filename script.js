@@ -4,7 +4,7 @@ const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('grid
 
 renderer.setSize(window.innerWidth, window.innerHeight);
 
-const gridSize = 20;
+const gridSize = 32;
 const geometry = new THREE.PlaneGeometry(10, 10, gridSize - 1, gridSize - 1);
 const material = new THREE.MeshBasicMaterial({ color: 0xcccccc, wireframe: true });
 const grid = new THREE.Mesh(geometry, material);
@@ -17,18 +17,51 @@ scene.add(grid);
 camera.position.set(0, 5, 10);
 camera.lookAt(0, 0, 0);
 
-function generateHeights() {
+let audioContext, analyser, dataArray;
+const audioInput = document.getElementById('audioInput');
+
+audioInput.addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+
+    reader.onload = function(e) {
+        const arrayBuffer = e.target.result;
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioContext.decodeAudioData(arrayBuffer, function(buffer) {
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 1024;
+            const bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+
+            source.connect(analyser);
+            analyser.connect(audioContext.destination);
+            source.start(0);
+        });
+    };
+
+    reader.readAsArrayBuffer(file);
+});
+
+function updateGridHeights() {
+    if (!analyser) return;
+
+    analyser.getByteFrequencyData(dataArray);
     const vertices = grid.geometry.attributes.position.array;
-    for (let i = 0; i < vertices.length; i += 3) {
-        vertices[i + 2] = Math.random() * 2; // Vary the height (z-coordinate)
+
+    for (let i = 0, j = 0; i < vertices.length; i += 3, j++) {
+        const index = Math.floor(j / gridSize * dataArray.length);
+        vertices[i + 2] = dataArray[index] / 128 * 3; // Scale the height
     }
+
     grid.geometry.attributes.position.needsUpdate = true;
 }
 
-generateHeights();
-
 function animate() {
     requestAnimationFrame(animate);
+    updateGridHeights();
     renderer.render(scene, camera);
 }
 
