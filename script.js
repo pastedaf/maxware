@@ -51,9 +51,14 @@ function updateGridHeights() {
     analyser.getByteFrequencyData(dataArray);
     const vertices = grid.geometry.attributes.position.array;
 
-    for (let i = 0, j = 0; i < vertices.length; i += 3, j++) {
-        const index = Math.floor(j / gridSize * dataArray.length);
-        vertices[i + 2] = dataArray[index] / 128 * 3; // Scale the height
+    for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+            const index = (i * gridSize + j) * 3;
+            const dataIndex = Math.floor((i * gridSize + j) / (gridSize * gridSize) * dataArray.length);
+            const xOffset = Math.sin(i / gridSize * Math.PI * 2) * 0.5;
+            const yOffset = Math.cos(j / gridSize * Math.PI * 2) * 0.5;
+            vertices[index + 2] = (dataArray[dataIndex] / 128 * 3 + xOffset + yOffset);
+        }
     }
 
     grid.geometry.attributes.position.needsUpdate = true;
