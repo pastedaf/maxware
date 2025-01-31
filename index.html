@@ -3,25 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>03 - max</title>
-</head>
-<body>
-    <h1>max ware trapaholics</h1>
-    <script type="module" src="./script.js"></script>
-
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Planar Grid with Varied Heights</title>
+    <title>Audio Reactive Planar Grid</title>
     <style>
         body { margin: 0; overflow: hidden; }
         canvas { display: block; }
+        #audioInput { position: absolute; top: 10px; left: 10px; }
     </style>
 </head>
 <body>
+    <input type="file" id="audioInput" accept="audio/*" />
     <canvas id="gridCanvas"></canvas>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="script.js"></script>
