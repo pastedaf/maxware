@@ -17,8 +17,19 @@ scene.add(grid);
 camera.position.set(0, 10, 10);
 camera.lookAt(0, 0, 0);
 
-let audioContext, analyser, dataArray;
+let audioContext, analyser, dataArray, audioBuffer, source;
 const audioInput = document.getElementById('audioInput');
+
+function playAudio() {
+    if (audioContext && audioBuffer) {
+        source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
+        source.start(0);
+        source.onended = playAudio; // Loop the audio
+    }
+}
 
 audioInput.addEventListener('change', function(e) {
     const file = e.target.files[0];
@@ -28,17 +39,14 @@ audioInput.addEventListener('change', function(e) {
         const arrayBuffer = e.target.result;
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         audioContext.decodeAudioData(arrayBuffer, function(buffer) {
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
+            audioBuffer = buffer;
 
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 1024;
             const bufferLength = analyser.frequencyBinCount;
             dataArray = new Uint8Array(bufferLength);
 
-            source.connect(analyser);
-            analyser.connect(audioContext.destination);
-            source.start(0);
+            playAudio(); // Start playing and looping
         });
     };
 
