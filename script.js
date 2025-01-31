@@ -4,7 +4,7 @@ const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('grid
 
 renderer.setSize(window.innerWidth, window.innerHeight);
 
-const gridSize = 50;
+const gridSize = 20;
 const geometry = new THREE.PlaneGeometry(10, 10, gridSize - 1, gridSize - 1);
 const material = new THREE.MeshBasicMaterial({ color: 0xcccccc, wireframe: true });
 const grid = new THREE.Mesh(geometry, material);
