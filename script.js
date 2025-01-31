@@ -61,12 +61,18 @@ const material = new THREE.MeshPhongMaterial({
     flatShading: true,
     emissive: 0x224422,
     specular: 0x448844,
-    shininess: 50
+    shininess: 50,
+    side: THREE.DoubleSide // Render both sides of the plane
 });
 
 const grid = new THREE.Mesh(geometry, material);
 grid.rotation.x = -Math.PI / 2;
+grid.position.y = -1.5; // Move the grid down slightly
 scene.add(grid);
+
+// Add a helper to visualize the grid
+const gridHelper = new THREE.GridHelper(15, gridSize);
+scene.add(gridHelper);
 
 // Initialize vertex colors
 const colors = new Float32Array(geometry.attributes.position.count * 3);
@@ -184,10 +190,10 @@ function updateGrid() {
         const y = Math.floor(i / gridSize);
         const dataIndex = Math.floor((x + y) / (2 * gridSize) * dataArray.length);
         
-        const audioHeight = (dataArray[dataIndex] / maxFrequency) * 3;
+        const audioHeight = (dataArray[dataIndex] / 255) * 3; // Use 255 as max instead of maxFrequency
         const targetHeight = Math.max(targetHeights[i], audioHeight);
         
-        vertices[i * 3 + 2] += (targetHeight - vertices[i * 3 + 2]) * 0.2;
+        vertices[i * 3 + 2] = targetHeight; // Directly set height instead of incrementing
         targetHeights[i] *= 0.98;
 
         // Green color scheme
