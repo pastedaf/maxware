@@ -14,13 +14,17 @@ class GridManager {
         this.instances = [];
         this.currentInstance = null;
         this.transformControls = null;
-        this.gridTemplate = this.createGrid();
-        this.currentSettings = null;
+        this.gridTemplate = this.createTemplate();
     }
 
-    createGrid() {
+    createTemplate() {
         const gridSize = 64;
         const geometry = new THREE.PlaneGeometry(15, 15, gridSize - 1, gridSize - 1);
+        
+        // Initialize color buffer for template
+        const colors = new Float32Array(geometry.attributes.position.count * 3);
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
         const material = new THREE.MeshPhongMaterial({
             vertexColors: true,
             wireframe: false,
@@ -30,50 +34,76 @@ class GridManager {
             shininess: 50,
         });
 
-        const grid = new THREE.Mesh(geometry, material);
-        grid.rotation.x = -Math.PI / 2;
-        
-        const colors = new Float32Array(geometry.attributes.position.count * 3);
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        grid.userData.targetHeights = new Float32Array(gridSize * gridSize);
-        grid.userData.originalPosition = grid.position.clone();
-        grid.userData.settings = {
-            lowColor: '#003300',
-            midColor: '#00ff00',
-            highColor: '#ffffff',
-            audioInfluence: 0.5,
-            decayRate: 0.98,
-            heightScale: 3,
-            colorMapping: 'height',
-            wavePattern: 'radial',
-            visible: true,
-            position: grid.position.clone(),
-            rotation: grid.rotation.clone()
+        return {
+            geometry,
+            material,
+            defaultSettings: {
+                audioInfluence: 0.5,
+                decayRate: 0.98,
+                heightScale: 3,
+                colorMapping: 'height',
+                wavePattern: 'radial',
+                visible: true,
+                lowColor: new THREE.Color(0x003300),
+                midColor: new THREE.Color(0x00ff00),
+                highColor: new THREE.Color(0xffffff)
+            }
         };
-
-        return grid;
     }
 
-    addInstance() {
-        const newGrid = this.gridTemplate.clone();
-        newGrid.userData = {
-            ...this.gridTemplate.userData,
-            settings: {...this.gridTemplate.userData.settings},
-            targetHeights: new Float32Array(this.gridTemplate.userData.targetHeights)
+    addInstance(baseInstance = null) {
+        // Clone geometry with independent buffers
+        const geometry = this.gridTemplate.geometry.clone();
+        
+        // Ensure color attribute exists
+        if (!geometry.attributes.color) {
+            const colors = new Float32Array(geometry.attributes.position.count * 3);
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        }
+
+        // Clone buffers with new memory allocation
+        geometry.attributes.position = geometry.attributes.position.clone();
+        geometry.attributes.position.array = new Float32Array(geometry.attributes.position.array);
+        geometry.attributes.color = geometry.attributes.color.clone();
+        geometry.attributes.color.array = new Float32Array(geometry.attributes.color.array);
+
+        // Create new material instance
+        const material = this.gridTemplate.material.clone();
+        
+        const grid = new THREE.Mesh(geometry, material);
+        grid.rotation.x = -Math.PI / 2;
+
+        // Deep clone settings
+        const sourceSettings = baseInstance ? baseInstance.userData.settings : this.gridTemplate.defaultSettings;
+        grid.userData = {
+            targetHeights: new Float32Array(64 * 64),
+            settings: {
+                audioInfluence: sourceSettings.audioInfluence,
+                decayRate: sourceSettings.decayRate,
+                heightScale: sourceSettings.heightScale,
+                colorMapping: sourceSettings.colorMapping,
+                wavePattern: sourceSettings.wavePattern,
+                visible: sourceSettings.visible,
+                lowColor: sourceSettings.lowColor.clone(),
+                midColor: sourceSettings.midColor.clone(),
+                highColor: sourceSettings.highColor.clone(),
+                position: new THREE.Vector3(),
+                rotation: new THREE.Euler()
+            }
         };
-        this.scene.add(newGrid);
-        this.instances.push(newGrid);
-        this.selectInstance(newGrid);
-        return newGrid;
+
+        this.scene.add(grid);
+        this.instances.push(grid);
+        this.selectInstance(grid);
+        return grid;
     }
 
     selectInstance(instance) {
         this.currentInstance = instance;
-        this.currentSettings = instance.userData.settings;
+        updateInstanceGUI();
         if (this.transformControls) {
             this.transformControls.attach(instance);
         }
-        updateInstanceGUI();
     }
 
     setupTransformControls(camera, renderer) {
@@ -222,10 +252,7 @@ const settings = {
     pixelateEnabled: true,
     fxaaEnabled: true,
     pixelSize: 8,
-    lowColor: '#003300',
-    midColor: '#00ff00',
-    highColor: '#ffffff',
-    cloneCurrent: () => gridManager.addInstance(),
+    cloneCurrent: () => gridManager.addInstance(gridManager.currentInstance),
     deleteCurrent: () => {
         scene.remove(gridManager.currentInstance);
         gridManager.instances = gridManager.instances.filter(i => i !== gridManager.currentInstance);
@@ -259,30 +286,42 @@ function updateInstanceGUI() {
 
     if (!gridManager.currentInstance) return;
 
+    const { settings } = gridManager.currentInstance.userData;
+
     instanceControllers.push(
-        instanceFolder.addColor(gridManager.currentSettings, 'lowColor').name('Low Color'),
-        instanceFolder.addColor(gridManager.currentSettings, 'midColor').name('Mid Color'),
-        instanceFolder.addColor(gridManager.currentSettings, 'highColor').name('High Color'),
-        instanceFolder.add(gridManager.currentSettings, 'audioInfluence', 0, 1)
+        instanceFolder.add(settings, 'audioInfluence', 0, 1)
             .name("Audio Influence").step(0.1),
-        instanceFolder.add(gridManager.currentSettings, 'heightScale', 0.5, 5)
+        instanceFolder.add(settings, 'heightScale', 0.5, 5)
             .name("Height Scale").step(0.1),
-        instanceFolder.add(gridManager.currentSettings, 'colorMapping', ['height', 'audio', 'combined'])
+        instanceFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined'])
             .name("Color Mapping"),
-        instanceFolder.add(gridManager.currentSettings, 'wavePattern', ['radial', 'linear', 'random'])
+        instanceFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random'])
             .name("Wave Pattern"),
-        instanceFolder.add(gridManager.currentSettings, 'visible').name("Visible")
+        instanceFolder.add(settings, 'visible').name("Visible")
             .onChange(val => gridManager.currentInstance.visible = val),
-        instanceFolder.add(gridManager.currentSettings, 'decayRate', 0.9, 0.999)
-            .name("Decay Rate").step(0.001)
+        instanceFolder.add(settings, 'decayRate', 0.9, 0.999)
+            .name("Decay Rate").step(0.001),
+        instanceFolder.addColor(
+            { 
+                get lowColor() { return settings.lowColor.getHexString() }, 
+                set lowColor(v) { settings.lowColor.set(v) } 
+            }, 'lowColor'
+        ).name('Low Color'),
+        instanceFolder.addColor(
+            { 
+                get midColor() { return settings.midColor.getHexString() }, 
+                set midColor(v) { settings.midColor.set(v) } 
+            }, 'midColor'
+        ).name('Mid Color'),
+        instanceFolder.addColor(
+            { 
+                get highColor() { return settings.highColor.getHexString() }, 
+                set highColor(v) { settings.highColor.set(v) } 
+            }, 'highColor'
+        ).name('High Color')
     );
     instanceFolder.open();
 }
-
-const visualFolder = gui.addFolder('Global Visuals');
-visualFolder.add(settings, 'pixelSize', 1, 16).step(1).onChange(val => {
-    pixelatePass.uniforms.pixelSize.value = val;
-});
 
 const instanceManagement = gui.addFolder('Instance Management');
 instanceManagement.add(settings, 'cloneCurrent').name("Clone Current");
@@ -348,13 +387,10 @@ function modifyGrid(grid, point) {
 }
 
 function updateGrid(grid) {
-    const settings = grid.userData.settings; // Use grid's own settings
+    const settings = grid.userData.settings;
     const frequencyData = audioManager.getFrequencyData('mid');
     const vertices = grid.geometry.attributes.position.array;
     const colors = grid.geometry.attributes.color.array;
-    const lowColor = new THREE.Color(settings.lowColor);
-    const midColor = new THREE.Color(settings.midColor);
-    const highColor = new THREE.Color(settings.highColor);
 
     for (let i = 0; i < gridSize * gridSize; i++) {
         const x = (i % gridSize) * (15 / (gridSize - 1)) - 7.5;
@@ -392,8 +428,8 @@ function updateGrid(grid) {
         }
 
         const color = colorFactor < 0.5 ? 
-            lowColor.clone().lerp(midColor, colorFactor * 2) : 
-            midColor.clone().lerp(highColor, (colorFactor - 0.5) * 2);
+            settings.lowColor.clone().lerp(settings.midColor, colorFactor * 2) : 
+            settings.midColor.clone().lerp(settings.highColor, (colorFactor - 0.5) * 2);
 
         colors[i * 3] = color.r;
         colors[i * 3 + 1] = color.g;
