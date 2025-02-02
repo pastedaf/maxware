@@ -8,6 +8,9 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import * as dat from 'https://cdn.skypack.dev/dat.gui';
 import * as THREE from 'three';
 
+
+
+const gui = new dat.GUI();
 class GridManager {
     constructor(scene) {
         this.scene = scene;
@@ -16,6 +19,7 @@ class GridManager {
         this.transformControls = null;
         this.gridTemplate = this.createTemplate();
         this.instanceCount = 0;
+        
     }
 
     createTemplate() {
@@ -227,6 +231,8 @@ renderer.setPixelRatio(window.devicePixelRatio);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
+controls.autoRotate = true; // Enable auto-rotation
+controls.autoRotateSpeed = 1.0; // Set rotation speed
 
 const gridManager = new GridManager(scene);
 gridManager.setupTransformControls(camera, renderer);
@@ -321,7 +327,6 @@ const settings = {
     }
 };
 
-const gui = new dat.GUI();
 const ppFolder = gui.addFolder('Post Processing');
 ppFolder.add(settings, 'pixelateEnabled').name("Pixelate").onChange(val => {
     pixelatePass.enabled = val;
@@ -337,7 +342,7 @@ ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = v
 const transformFolder = gui.addFolder('Transform Controls');
 transformFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .onChange(val => gridManager.transformControls.setMode(val));
-
+transformFolder.add(controls, 'autoRotate').name("Auto Rotate");
 const instanceManagement = gui.addFolder('Instance Management');
 instanceManagement.add(settings, 'cloneCurrent').name("Clone Current");
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Current");
@@ -464,6 +469,7 @@ function animate() {
     composer.render();
 }
 
+gridManager.addInstance();
 animate();
 
 window.addEventListener('resize', () => {
