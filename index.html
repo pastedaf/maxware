@@ -4,14 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audio Reactive Planar Grid</title>
-    <style>
-        body { margin: 0; overflow: hidden; }
-        canvas { display: block; }
-        #audioInput { position: absolute; top: 10px; left: 10px; }
-    </style>
+   
 </head>
 <body>
-    <input type="file" id="audioInput" accept="audio/*" />
+    <!-- Add these controls above the canvas -->
+<div id="controls">
+    <button id="addMode">Add</button>
+    <button id="deleteMode">Delete</button>
+    <button id="transformMode">Transform</button>
+    <input type="file" id="audioInput" accept="audio/*">
+    
+</div>
     <canvas id="gridCanvas"></canvas>
     <script type="module" src="script.js"></script>
 </body>

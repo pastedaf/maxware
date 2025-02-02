@@ -2,28 +2,181 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import * as dat from 'https://cdn.skypack.dev/dat.gui';
 import * as THREE from 'three';
+
+class GridManager {
+    constructor(scene) {
+        this.scene = scene;
+        this.instances = [];
+        this.currentInstance = null;
+        this.transformControls = null;
+        this.gridTemplate = this.createGrid();
+        this.currentSettings = null;
+    }
+
+    createGrid() {
+        const gridSize = 64;
+        const geometry = new THREE.PlaneGeometry(15, 15, gridSize - 1, gridSize - 1);
+        const material = new THREE.MeshPhongMaterial({
+            vertexColors: true,
+            wireframe: false,
+            flatShading: true,
+            emissive: 0x224422,
+            specular: 0x448844,
+            shininess: 50,
+        });
+
+        const grid = new THREE.Mesh(geometry, material);
+        grid.rotation.x = -Math.PI / 2;
+        
+        const colors = new Float32Array(geometry.attributes.position.count * 3);
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        grid.userData.targetHeights = new Float32Array(gridSize * gridSize);
+        grid.userData.originalPosition = grid.position.clone();
+        grid.userData.settings = {
+            lowColor: '#003300',
+            midColor: '#00ff00',
+            highColor: '#ffffff',
+            audioInfluence: 0.5,
+            decayRate: 0.98,
+            heightScale: 3,
+            colorMapping: 'height',
+            wavePattern: 'radial',
+            visible: true,
+            position: grid.position.clone(),
+            rotation: grid.rotation.clone()
+        };
+
+        return grid;
+    }
+
+    addInstance() {
+        const newGrid = this.gridTemplate.clone();
+        newGrid.userData = {
+            ...this.gridTemplate.userData,
+            settings: {...this.gridTemplate.userData.settings},
+            targetHeights: new Float32Array(this.gridTemplate.userData.targetHeights)
+        };
+        this.scene.add(newGrid);
+        this.instances.push(newGrid);
+        this.selectInstance(newGrid);
+        return newGrid;
+    }
+
+    selectInstance(instance) {
+        this.currentInstance = instance;
+        this.currentSettings = instance.userData.settings;
+        if (this.transformControls) {
+            this.transformControls.attach(instance);
+        }
+        updateInstanceGUI();
+    }
+
+    setupTransformControls(camera, renderer) {
+        this.transformControls = new TransformControls(camera, renderer.domElement);
+        this.transformControls.addEventListener('dragging-changed', event => {
+            controls.enabled = !event.value;
+        });
+        this.transformControls.addEventListener('objectChange', () => {
+            if (this.currentInstance) {
+                this.currentInstance.userData.settings.position.copy(this.currentInstance.position);
+                this.currentInstance.userData.settings.rotation.copy(this.currentInstance.rotation);
+            }
+        });
+        this.scene.add(this.transformControls.getHelper());
+    }
+}
+
+class AudioManager {
+    constructor() {
+        this.audioContext = null;
+        this.analyser = null;
+        this.dataArray = null;
+        this.audioBuffer = null;
+        this.source = null;
+        this.frequencyRanges = {
+            low: [20, 250],
+            mid: [251, 2000],
+            high: [2001, 20000]
+        };
+    }
+
+    async loadAudio(file) {
+        if (this.audioContext) this.audioContext.close();
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        const arrayBuffer = await file.arrayBuffer();
+        this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+        this.setupAnalyser();
+    }
+
+    setupAnalyser() {
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 2048;
+        this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    }
+
+    play() {
+        if (this.source) this.source.stop();
+        this.source = this.audioContext.createBufferSource();
+        this.source.buffer = this.audioBuffer;
+        this.source.connect(this.analyser);
+        this.analyser.connect(this.audioContext.destination);
+        this.source.start(0);
+        this.source.loop = true;
+    }
+
+    getFrequencyData(range = 'mid') {
+        if (!this.analyser) return new Uint8Array();
+        this.analyser.getByteFrequencyData(this.dataArray);
+        
+        const [low, high] = this.frequencyRanges[range];
+        const nyquist = this.audioContext.sampleRate / 2;
+        const lowIndex = Math.round((low / nyquist) * this.dataArray.length);
+        const highIndex = Math.round((high / nyquist) * this.dataArray.length);
+        
+        return this.dataArray.slice(lowIndex, highIndex);
+    }
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-
 const renderer = new THREE.WebGLRenderer({ 
     canvas: document.getElementById('gridCanvas'),
     antialias: true
 });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
 
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
+const gridManager = new GridManager(scene);
+gridManager.setupTransformControls(camera, renderer);
+const audioManager = new AudioManager();
 
-// Post-processing setup
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 
-const pixelateShader = {
+const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    1.5,
+    0.4,
+    0.85
+);
+composer.addPass(bloomPass);
+
+const fxaaPass = new ShaderPass(FXAAShader);
+fxaaPass.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
+composer.addPass(fxaaPass);
+
+const pixelatePass = new ShaderPass({
     uniforms: {
         tDiffuse: { value: null },
         resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
@@ -47,160 +200,204 @@ const pixelateShader = {
             gl_FragColor = texture2D(tDiffuse, coord);
         }
     `
-};
-
-const pixelatePass = new ShaderPass(pixelateShader);
+});
 composer.addPass(pixelatePass);
 
-// Grid configuration
-const gridSize = 64;
-const geometry = new THREE.PlaneGeometry(15, 15, gridSize - 1, gridSize - 1);
-const material = new THREE.MeshPhongMaterial({
-    vertexColors: true,
-    wireframe: false,
-    flatShading: true,
-    emissive: 0x224422,
-    specular: 0x448844,
-    shininess: 50,
-    side: THREE.DoubleSide // Render both sides of the plane
-});
-
-const grid = new THREE.Mesh(geometry, material);
-grid.rotation.x = -Math.PI / 2;
-grid.position.y = -1.5; // Move the grid down slightly
-scene.add(grid);
-
-// Add a helper to visualize the grid
-const gridHelper = new THREE.GridHelper(15, gridSize);
-scene.add(gridHelper);
-
-// Initialize vertex colors
-const colors = new Float32Array(geometry.attributes.position.count * 3);
-geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-// Lighting
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 scene.add(ambientLight);
-
 const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
 directionalLight.position.set(5, 5, 5);
 scene.add(directionalLight);
 
 camera.position.set(20, 25, 20);
 camera.lookAt(0, 0, 0);
+const gridSize = 64;
+const maxDistance = Math.sqrt(7.5 * 7.5 + 7.5 * 7.5);
 
-// Audio processing setup
-let audioContext, analyser, dataArray, audioBuffer, source;
-const targetHeights = new Float32Array(gridSize * gridSize);
-const audioInput = document.getElementById('audioInput');
-let maxFrequency = 1;
+const settings = {
+    transformMode: 'translate',
+    bloomStrength: 1.5,
+    bloomThreshold: 0.4,
+    bloomRadius: 0.85,
+    pixelateEnabled: true,
+    fxaaEnabled: true,
+    pixelSize: 8,
+    lowColor: '#003300',
+    midColor: '#00ff00',
+    highColor: '#ffffff',
+    cloneCurrent: () => gridManager.addInstance(),
+    deleteCurrent: () => {
+        scene.remove(gridManager.currentInstance);
+        gridManager.instances = gridManager.instances.filter(i => i !== gridManager.currentInstance);
+        if (gridManager.instances.length > 0) gridManager.selectInstance(gridManager.instances[0]);
+    }
+};
 
-// Interaction setup
+const gui = new dat.GUI();
+const ppFolder = gui.addFolder('Post Processing');
+ppFolder.add(settings, 'pixelateEnabled').name("Pixelate").onChange(val => {
+    pixelatePass.enabled = val;
+});
+ppFolder.add(settings, 'fxaaEnabled').name("FXAA").onChange(val => {
+    fxaaPass.enabled = val;
+});
+ppFolder.add(bloomPass, 'enabled').name("Bloom");
+ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength = val);
+ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
+ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
+
+const transformFolder = gui.addFolder('Transform Controls');
+transformFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
+    .onChange(val => gridManager.transformControls.setMode(val));
+
+const instanceFolder = gui.addFolder('Instance Settings');
+let instanceControllers = [];
+
+function updateInstanceGUI() {
+    instanceControllers.forEach(ctrl => instanceFolder.remove(ctrl));
+    instanceControllers = [];
+
+    if (!gridManager.currentInstance) return;
+
+    instanceControllers.push(
+        instanceFolder.addColor(gridManager.currentSettings, 'lowColor').name('Low Color'),
+        instanceFolder.addColor(gridManager.currentSettings, 'midColor').name('Mid Color'),
+        instanceFolder.addColor(gridManager.currentSettings, 'highColor').name('High Color'),
+        instanceFolder.add(gridManager.currentSettings, 'audioInfluence', 0, 1)
+            .name("Audio Influence").step(0.1),
+        instanceFolder.add(gridManager.currentSettings, 'heightScale', 0.5, 5)
+            .name("Height Scale").step(0.1),
+        instanceFolder.add(gridManager.currentSettings, 'colorMapping', ['height', 'audio', 'combined'])
+            .name("Color Mapping"),
+        instanceFolder.add(gridManager.currentSettings, 'wavePattern', ['radial', 'linear', 'random'])
+            .name("Wave Pattern"),
+        instanceFolder.add(gridManager.currentSettings, 'visible').name("Visible")
+            .onChange(val => gridManager.currentInstance.visible = val),
+        instanceFolder.add(gridManager.currentSettings, 'decayRate', 0.9, 0.999)
+            .name("Decay Rate").step(0.001)
+    );
+    instanceFolder.open();
+}
+
+const visualFolder = gui.addFolder('Global Visuals');
+visualFolder.add(settings, 'pixelSize', 1, 16).step(1).onChange(val => {
+    pixelatePass.uniforms.pixelSize.value = val;
+});
+
+const instanceManagement = gui.addFolder('Instance Management');
+instanceManagement.add(settings, 'cloneCurrent').name("Clone Current");
+instanceManagement.add(settings, 'deleteCurrent').name("Delete Current");
+
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 let isDragging = false;
 
-window.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    handleMouse(e);
+document.getElementById('audioInput').addEventListener('change', async (e) => {
+    await audioManager.loadAudio(e.target.files[0]);
+    audioManager.play();
 });
 
-window.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    handleMouse(e);
-});
+window.addEventListener('mousedown', (e) => handleMouseStart(e));
+window.addEventListener('mousemove', (e) => handleMouseMove(e));
+window.addEventListener('mouseup', () => isDragging = false);
 
-window.addEventListener('mouseup', () => {
-    isDragging = false;
-});
-
-function handleMouse(e) {
+function handleMouseStart(e) {
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     
     raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObject(grid);
+    const intersects = raycaster.intersectObjects(gridManager.instances);
     
     if (intersects.length > 0) {
-        const localPoint = grid.worldToLocal(intersects[0].point.clone());
-        const vertices = grid.geometry.attributes.position.array;
+        gridManager.selectInstance(intersects[0].object);
+        isDragging = true;
+    }
+}
+
+function handleMouseMove(e) {
+    if (!isDragging || !gridManager.currentInstance) return;
+    
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObject(gridManager.currentInstance);
+    
+    if (intersects.length > 0) {
+        const localPoint = gridManager.currentInstance.worldToLocal(intersects[0].point.clone());
+        modifyGrid(gridManager.currentInstance, localPoint);
+    }
+}
+
+function modifyGrid(grid, point) {
+    const vertices = grid.geometry.attributes.position.array;
+
+    for (let i = 0; i < gridSize * gridSize; i++) {
+        const x = (i % gridSize) * (15 / (gridSize - 1)) - 7.5;
+        const z = Math.floor(i / gridSize) * (15 / (gridSize - 1)) - 7.5;
+        const dx = x - point.x;
+        const dz = z - point.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
         
-        for (let i = 0; i < gridSize * gridSize; i++) {
-            const x = (i % gridSize) * (15 / (gridSize - 1)) - 7.5;
-            const y = Math.floor(i / gridSize) * (15 / (gridSize - 1)) - 7.5;
-            const dx = x - localPoint.x;
-            const dy = y - localPoint.z;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (distance < 1) {
-                targetHeights[i] = Math.min(targetHeights[i] + 0.2, 3);
-            }
+        if (distance < 1.5) {
+            const falloff = 1 - (distance / 1.5);
+            const strength = falloff * 0.2;
+            grid.userData.targetHeights[i] = Math.min(grid.userData.targetHeights[i] + strength, 5);
         }
     }
 }
 
-// File input handler
-audioInput.addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    const reader = new FileReader();
-
-    reader.onload = function(e) {
-        const arrayBuffer = e.target.result;
-        if (audioContext) audioContext.close();
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        audioContext.decodeAudioData(arrayBuffer, function(buffer) {
-            audioBuffer = buffer;
-            setupAudioAnalyser();
-            playAudio();
-        }, function(e) {
-            console.error("Error decoding audio data", e);
-        });
-    };
-    reader.readAsArrayBuffer(file);
-});
-
-function setupAudioAnalyser() {
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = 1024;
-    dataArray = new Uint8Array(analyser.frequencyBinCount);
-}
-
-function playAudio() {
-    if (source) source.stop();
-    source = audioContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(analyser);
-    analyser.connect(audioContext.destination);
-    source.start(0);
-    source.loop = true;
-}
-
-// Animation loop
-function updateGrid() {
-    if (!analyser) return;
-
-    analyser.getByteFrequencyData(dataArray);
+function updateGrid(grid) {
+    const settings = grid.userData.settings; // Use grid's own settings
+    const frequencyData = audioManager.getFrequencyData('mid');
     const vertices = grid.geometry.attributes.position.array;
     const colors = grid.geometry.attributes.color.array;
-
-    maxFrequency = Math.max(...dataArray);
+    const lowColor = new THREE.Color(settings.lowColor);
+    const midColor = new THREE.Color(settings.midColor);
+    const highColor = new THREE.Color(settings.highColor);
 
     for (let i = 0; i < gridSize * gridSize; i++) {
-        const x = i % gridSize;
-        const y = Math.floor(i / gridSize);
-        const dataIndex = Math.floor((x + y) / (2 * gridSize) * dataArray.length);
-        
-        const audioHeight = (dataArray[dataIndex] / 255) * 3; // Use 255 as max instead of maxFrequency
-        const targetHeight = Math.max(targetHeights[i], audioHeight);
-        
-        vertices[i * 3 + 2] = targetHeight; // Directly set height instead of incrementing
-        targetHeights[i] *= 0.98;
+        const x = (i % gridSize) * (15 / (gridSize - 1)) - 7.5;
+        const z = Math.floor(i / gridSize) * (15 / (gridSize - 1)) - 7.5;
+        let audioValue = 0;
 
-        // Green color scheme
-        const heightFactor = vertices[i * 3 + 2] / 3;
-        colors[i * 3] = heightFactor * 0.2; // Red
-        colors[i * 3 + 1] = heightFactor * 0.8 + 0.2; // Green
-        colors[i * 3 + 2] = heightFactor * 0.2; // Blue
+        switch(settings.wavePattern) {
+            case 'radial':
+                const distance = Math.sqrt(x*x + z*z);
+                audioValue = frequencyData[Math.floor((distance / maxDistance) * frequencyData.length)] || 0;
+                break;
+            case 'linear':
+                audioValue = frequencyData[i % frequencyData.length] || 0;
+                break;
+            case 'random':
+                audioValue = frequencyData[Math.floor(Math.random() * frequencyData.length)] || 0;
+                break;
+        }
+
+        const audioHeight = (audioValue / 255) * settings.heightScale * settings.audioInfluence;
+        vertices[i * 3 + 2] = Math.max(grid.userData.targetHeights[i], audioHeight);
+        grid.userData.targetHeights[i] *= settings.decayRate;
+
+        let colorFactor;
+        switch(settings.colorMapping) {
+            case 'height':
+                colorFactor = vertices[i * 3 + 2] / settings.heightScale;
+                break;
+            case 'audio':
+                colorFactor = audioValue / 255;
+                break;
+            case 'combined':
+                colorFactor = (vertices[i * 3 + 2] + audioValue) / (settings.heightScale + 255);
+                break;
+        }
+
+        const color = colorFactor < 0.5 ? 
+            lowColor.clone().lerp(midColor, colorFactor * 2) : 
+            midColor.clone().lerp(highColor, (colorFactor - 0.5) * 2);
+
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
     }
 
     grid.geometry.attributes.position.needsUpdate = true;
@@ -209,18 +406,20 @@ function updateGrid() {
 
 function animate() {
     requestAnimationFrame(animate);
-    updateGrid();
+    gridManager.instances.forEach(grid => {
+        if (grid.userData.settings.visible) updateGrid(grid);
+    });
     controls.update();
     composer.render();
 }
 
 animate();
 
-// Window resize handler
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
     pixelatePass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+    fxaaPass.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
 });
