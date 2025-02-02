@@ -39,14 +39,14 @@ class GridManager {
         grid.userData.originalPosition = grid.position.clone();
         grid.userData.settings = {
             lowColor: '#003300',
-            midColor: '#00ff00',
-            highColor: '#ffffff',
-            audioInfluence: 0.5,
+            midColor: '#386b38',
+            highColor: '#ff7ec9',
             decayRate: 0.98,
             heightScale: 3,
             colorMapping: 'height',
             wavePattern: 'radial',
             visible: true,
+            strengthScale: 1.0,
             position: grid.position.clone(),
             rotation: grid.rotation.clone()
         };
@@ -209,7 +209,9 @@ const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
 directionalLight.position.set(5, 5, 5);
 scene.add(directionalLight);
 
-camera.position.set(20, 25, 20);
+const defaultCamPos = [7.5, 7.5, 7.5];
+
+camera.position.set(defaultCamPos[0],defaultCamPos[1],defaultCamPos[2]);
 camera.lookAt(0, 0, 0);
 const gridSize = 64;
 const maxDistance = Math.sqrt(7.5 * 7.5 + 7.5 * 7.5);
@@ -230,7 +232,8 @@ const settings = {
         scene.remove(gridManager.currentInstance);
         gridManager.instances = gridManager.instances.filter(i => i !== gridManager.currentInstance);
         if (gridManager.instances.length > 0) gridManager.selectInstance(gridManager.instances[0]);
-    }
+    },
+    autoOrbit: true // New auto orbit setting
 };
 
 const gui = new dat.GUI();
@@ -249,10 +252,12 @@ ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = v
 const transformFolder = gui.addFolder('Transform Controls');
 transformFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .onChange(val => gridManager.transformControls.setMode(val));
+transformFolder.add(settings, 'autoOrbit').name("Auto Orbit"); // New auto orbit switch
 
 const instanceFolder = gui.addFolder('Instance Settings');
 let instanceControllers = [];
 
+// Add the strength scale slider to the instance settings
 function updateInstanceGUI() {
     instanceControllers.forEach(ctrl => instanceFolder.remove(ctrl));
     instanceControllers = [];
@@ -263,8 +268,6 @@ function updateInstanceGUI() {
         instanceFolder.addColor(gridManager.currentSettings, 'lowColor').name('Low Color'),
         instanceFolder.addColor(gridManager.currentSettings, 'midColor').name('Mid Color'),
         instanceFolder.addColor(gridManager.currentSettings, 'highColor').name('High Color'),
-        instanceFolder.add(gridManager.currentSettings, 'audioInfluence', 0, 1)
-            .name("Audio Influence").step(0.1),
         instanceFolder.add(gridManager.currentSettings, 'heightScale', 0.5, 5)
             .name("Height Scale").step(0.1),
         instanceFolder.add(gridManager.currentSettings, 'colorMapping', ['height', 'audio', 'combined'])
@@ -274,7 +277,9 @@ function updateInstanceGUI() {
         instanceFolder.add(gridManager.currentSettings, 'visible').name("Visible")
             .onChange(val => gridManager.currentInstance.visible = val),
         instanceFolder.add(gridManager.currentSettings, 'decayRate', 0.9, 0.999)
-            .name("Decay Rate").step(0.001)
+            .name("Decay Rate").step(0.001),
+        instanceFolder.add(gridManager.currentSettings, 'strengthScale', 0.01, 1.0)
+            .name("Strength Scale").step(0.1) // New strength scale slider
     );
     instanceFolder.open();
 }
@@ -315,7 +320,7 @@ function handleMouseStart(e) {
 }
 
 function handleMouseMove(e) {
-    if (!isDragging || !gridManager.currentInstance) return;
+    if (isDragging || !gridManager.currentInstance) return;
     
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -329,8 +334,10 @@ function handleMouseMove(e) {
     }
 }
 
+// Modify the modifyGrid function to use the strength scale
 function modifyGrid(grid, point) {
     const vertices = grid.geometry.attributes.position.array;
+    const strengthScale = grid.userData.settings.strengthScale || 1.0; // Default to 1.0 if not set
 
     for (let i = 0; i < gridSize * gridSize; i++) {
         const x = (i % gridSize) * (15 / (gridSize - 1)) - 7.5;
@@ -341,11 +348,12 @@ function modifyGrid(grid, point) {
         
         if (distance < 1.5) {
             const falloff = 1 - (distance / 1.5);
-            const strength = falloff * 0.2;
+            const strength = falloff * 0.2 * strengthScale;
             grid.userData.targetHeights[i] = Math.min(grid.userData.targetHeights[i] + strength, 5);
         }
     }
 }
+
 
 function updateGrid(grid) {
     const settings = grid.userData.settings; // Use grid's own settings
@@ -374,7 +382,7 @@ function updateGrid(grid) {
                 break;
         }
 
-        const audioHeight = (audioValue / 255) * settings.heightScale * settings.audioInfluence;
+        const audioHeight = (audioValue / 255) * settings.heightScale; 
         vertices[i * 3 + 2] = Math.max(grid.userData.targetHeights[i], audioHeight);
         grid.userData.targetHeights[i] *= settings.decayRate;
 
@@ -406,13 +414,28 @@ function updateGrid(grid) {
 
 function animate() {
     requestAnimationFrame(animate);
+
+    if (settings.autoOrbit && gridManager.currentInstance) {
+        const orbitSpeed = 0.01; // Adjust the orbit speed as needed
+        gridManager.currentInstance.rotation.z += orbitSpeed;
+    } else {
+        controls.update();
+    }
+
+    // Adjust camera zoom based on audio amplitude
+    const frequencyData = audioManager.getFrequencyData('mid');
+    const averageAmplitude = frequencyData.reduce((sum, value) => sum + value, 0) / frequencyData.length;
+    const zoomFactor =  (100 / averageAmplitude); // Adjust the zoom factor as needed
+    camera.position.set(defaultCamPos[0] * zoomFactor, defaultCamPos[1] * zoomFactor, defaultCamPos[2] * zoomFactor);
+    camera.lookAt(0, 0, 0);
+
     gridManager.instances.forEach(grid => {
         if (grid.userData.settings.visible) updateGrid(grid);
     });
-    controls.update();
     composer.render();
 }
 
+gridManager.addInstance();
 animate();
 
 window.addEventListener('resize', () => {
