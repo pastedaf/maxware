@@ -331,6 +331,7 @@ const ppFolder = gui.addFolder('Post Processing');
 ppFolder.add(settings, 'pixelateEnabled').name("Pixelate").onChange(val => {
     pixelatePass.enabled = val;
 });
+ppFolder.add(settings, 'pixelSize', 1, 32).onChange(val => pixelatePass.uniforms.pixelSize.value = val);
 ppFolder.add(settings, 'fxaaEnabled').name("FXAA").onChange(val => {
     fxaaPass.enabled = val;
 });
