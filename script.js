@@ -15,13 +15,13 @@ class GridManager {
         this.currentInstance = null;
         this.transformControls = null;
         this.gridTemplate = this.createTemplate();
+        this.instanceCount = 0;
     }
 
     createTemplate() {
         const gridSize = 64;
         const geometry = new THREE.PlaneGeometry(15, 15, gridSize - 1, gridSize - 1);
         
-        // Initialize color buffer for template
         const colors = new Float32Array(geometry.attributes.position.count * 3);
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
@@ -46,34 +46,31 @@ class GridManager {
                 visible: true,
                 lowColor: new THREE.Color(0x003300),
                 midColor: new THREE.Color(0x00ff00),
-                highColor: new THREE.Color(0xffffff)
+                highColor: new THREE.Color(0xffffff),
+                position: new THREE.Vector3(),
+                rotation: new THREE.Euler()
             }
         };
     }
 
     addInstance(baseInstance = null) {
-        // Clone geometry with independent buffers
         const geometry = this.gridTemplate.geometry.clone();
         
-        // Ensure color attribute exists
         if (!geometry.attributes.color) {
             const colors = new Float32Array(geometry.attributes.position.count * 3);
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         }
 
-        // Clone buffers with new memory allocation
         geometry.attributes.position = geometry.attributes.position.clone();
         geometry.attributes.position.array = new Float32Array(geometry.attributes.position.array);
         geometry.attributes.color = geometry.attributes.color.clone();
         geometry.attributes.color.array = new Float32Array(geometry.attributes.color.array);
 
-        // Create new material instance
         const material = this.gridTemplate.material.clone();
         
         const grid = new THREE.Mesh(geometry, material);
         grid.rotation.x = -Math.PI / 2;
 
-        // Deep clone settings
         const sourceSettings = baseInstance ? baseInstance.userData.settings : this.gridTemplate.defaultSettings;
         grid.userData = {
             targetHeights: new Float32Array(64 * 64),
@@ -89,8 +86,53 @@ class GridManager {
                 highColor: sourceSettings.highColor.clone(),
                 position: new THREE.Vector3(),
                 rotation: new THREE.Euler()
-            }
+            },
+            guiFolder: null,
+            controllers: []
         };
+
+        if (baseInstance) {
+            grid.position.copy(baseInstance.position);
+            grid.rotation.copy(baseInstance.rotation);
+        }
+        grid.userData.settings.position.copy(grid.position);
+        grid.userData.settings.rotation.copy(grid.rotation);
+
+        this.instanceCount++;
+        const folderName = `Grid ${this.instanceCount}`;
+        const guiFolder = gui.addFolder(folderName);
+        grid.userData.guiFolder = guiFolder;
+        
+        const settings = grid.userData.settings;
+        grid.userData.controllers.push(
+            guiFolder.add(settings, 'audioInfluence', 0, 1).name("Audio Influence").step(0.1),
+            guiFolder.add(settings, 'heightScale', 0.5, 5).name("Height Scale").step(0.1),
+            guiFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined']).name("Color Mapping"),
+            guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random']).name("Wave Pattern"),
+            guiFolder.add(settings, 'visible').name("Visible").onChange(val => grid.visible = val),
+            guiFolder.add(settings, 'decayRate', 0.9, 0.999).name("Decay Rate").step(0.001),
+            guiFolder.addColor(
+                { 
+                    get lowColor() { return settings.lowColor.getHex() }, 
+                    set lowColor(v) { settings.lowColor.setHex(v) } 
+                }, 'lowColor'
+            ).name('Low Color'),
+            guiFolder.addColor(
+                { 
+                    get midColor() { return settings.midColor.getHex() }, 
+                    set midColor(v) { settings.midColor.setHex(v) } 
+                }, 'midColor'
+            ).name('Mid Color'),
+            guiFolder.addColor(
+                { 
+                    get highColor() { return settings.highColor.getHex() }, 
+                    set highColor(v) { settings.highColor.setHex(v) } 
+                }, 'highColor'
+            ).name('High Color')
+        );
+
+
+        guiFolder.open();
 
         this.scene.add(grid);
         this.instances.push(grid);
@@ -100,7 +142,6 @@ class GridManager {
 
     selectInstance(instance) {
         this.currentInstance = instance;
-        updateInstanceGUI();
         if (this.transformControls) {
             this.transformControls.attach(instance);
         }
@@ -254,9 +295,29 @@ const settings = {
     pixelSize: 8,
     cloneCurrent: () => gridManager.addInstance(gridManager.currentInstance),
     deleteCurrent: () => {
-        scene.remove(gridManager.currentInstance);
-        gridManager.instances = gridManager.instances.filter(i => i !== gridManager.currentInstance);
-        if (gridManager.instances.length > 0) gridManager.selectInstance(gridManager.instances[0]);
+        if (gridManager.currentInstance) {
+            const instance = gridManager.currentInstance;
+            scene.remove(instance);
+            gridManager.instances = gridManager.instances.filter(i => i !== instance);
+            
+            // Remove GUI folder
+            const guiFolder = instance.userData.guiFolder;
+            if (guiFolder) {
+                if (guiFolder.__li && guiFolder.__li.parentNode) {
+                    guiFolder.__li.parentNode.removeChild(guiFolder.__li);
+                }
+                const index = gui.__folders.indexOf(guiFolder);
+                if (index !== -1) {
+                    gui.__folders.splice(index, 1);
+                }
+            }
+
+            if (gridManager.instances.length > 0) {
+                gridManager.selectInstance(gridManager.instances[0]);
+            } else {
+                gridManager.currentInstance = null;
+            }
+        }
     }
 };
 
@@ -276,52 +337,6 @@ ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = v
 const transformFolder = gui.addFolder('Transform Controls');
 transformFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .onChange(val => gridManager.transformControls.setMode(val));
-
-const instanceFolder = gui.addFolder('Instance Settings');
-let instanceControllers = [];
-
-function updateInstanceGUI() {
-    instanceControllers.forEach(ctrl => instanceFolder.remove(ctrl));
-    instanceControllers = [];
-
-    if (!gridManager.currentInstance) return;
-
-    const { settings } = gridManager.currentInstance.userData;
-
-    instanceControllers.push(
-        instanceFolder.add(settings, 'audioInfluence', 0, 1)
-            .name("Audio Influence").step(0.1),
-        instanceFolder.add(settings, 'heightScale', 0.5, 5)
-            .name("Height Scale").step(0.1),
-        instanceFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined'])
-            .name("Color Mapping"),
-        instanceFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random'])
-            .name("Wave Pattern"),
-        instanceFolder.add(settings, 'visible').name("Visible")
-            .onChange(val => gridManager.currentInstance.visible = val),
-        instanceFolder.add(settings, 'decayRate', 0.9, 0.999)
-            .name("Decay Rate").step(0.001),
-        instanceFolder.addColor(
-            { 
-                get lowColor() { return settings.lowColor.getHexString() }, 
-                set lowColor(v) { settings.lowColor.set(v) } 
-            }, 'lowColor'
-        ).name('Low Color'),
-        instanceFolder.addColor(
-            { 
-                get midColor() { return settings.midColor.getHexString() }, 
-                set midColor(v) { settings.midColor.set(v) } 
-            }, 'midColor'
-        ).name('Mid Color'),
-        instanceFolder.addColor(
-            { 
-                get highColor() { return settings.highColor.getHexString() }, 
-                set highColor(v) { settings.highColor.set(v) } 
-            }, 'highColor'
-        ).name('High Color')
-    );
-    instanceFolder.open();
-}
 
 const instanceManagement = gui.addFolder('Instance Management');
 instanceManagement.add(settings, 'cloneCurrent').name("Clone Current");
