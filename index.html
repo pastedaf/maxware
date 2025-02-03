@@ -31,6 +31,14 @@
 <body>
     <!-- Add these controls above the canvas -->
     <div id="controls">
+        <div>
+            <label>
+                <input type="radio" name="audioSource" value="file" checked> Audio File
+            </label>
+            <label>
+                <input type="radio" name="audioSource" value="mic"> Microphone
+            </label>
+        </div>
         <input type="file" id="audioInput" accept="audio/*">
     </div>
     <canvas id="gridCanvas"></canvas>

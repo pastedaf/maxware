@@ -8,9 +8,8 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import * as dat from 'https://cdn.skypack.dev/dat.gui';
 import * as THREE from 'three';
 
-
-
 const gui = new dat.GUI();
+
 class GridManager {
     constructor(scene) {
         this.scene = scene;
@@ -178,6 +177,7 @@ class AudioManager {
             mid: [251, 2000],
             high: [2001, 20000]
         };
+        this.useMic = false;
     }
 
     async loadAudio(file) {
@@ -187,6 +187,16 @@ class AudioManager {
         const arrayBuffer = await file.arrayBuffer();
         this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
         this.setupAnalyser();
+    }
+
+    async useMicrophone() {
+        if (this.audioContext) this.audioContext.close();
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this.source = this.audioContext.createMediaStreamSource(stream);
+        this.setupAnalyser();
+        this.source.connect(this.analyser);
     }
 
     setupAnalyser() {
@@ -355,6 +365,16 @@ let isDragging = false;
 document.getElementById('audioInput').addEventListener('change', async (e) => {
     await audioManager.loadAudio(e.target.files[0]);
     audioManager.play();
+});
+
+document.querySelectorAll('input[name="audioSource"]').forEach(input => {
+    input.addEventListener('change', async (e) => {
+        if (e.target.value === 'mic') {
+            await audioManager.useMicrophone();
+        } else {
+            document.getElementById('audioInput').click();
+        }
+    });
 });
 
 window.addEventListener('mousedown', (e) => handleMouseStart(e));
