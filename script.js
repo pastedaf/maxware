@@ -309,6 +309,7 @@ const settings = {
     pixelateEnabled: true,
     fxaaEnabled: true,
     pixelSize: 8,
+    autoRotateSpeed: 1.0, // Add this line
     cloneCurrent: () => gridManager.addInstance(gridManager.currentInstance),
     deleteCurrent: () => {
         if (gridManager.currentInstance) {
@@ -354,6 +355,10 @@ const transformFolder = gui.addFolder('Transform Controls');
 transformFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .onChange(val => gridManager.transformControls.setMode(val));
 transformFolder.add(controls, 'autoRotate').name("Auto Rotate");
+transformFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Auto Rotate Speed").onChange(val => {
+    controls.autoRotateSpeed = val;
+});
+
 const instanceManagement = gui.addFolder('Instance Management');
 instanceManagement.add(settings, 'cloneCurrent').name("Clone Current");
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Current");
