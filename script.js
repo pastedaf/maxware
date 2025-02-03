@@ -471,7 +471,7 @@ function animate() {
     const minFOV = 50;
     const maxFOV = 100;
     const amplitudeFactor = averageAmplitude / 255;
-    camera.fov = minFOV + (maxFOV - minFOV) * amplitudeFactor;
+    camera.fov = maxFOV - (maxFOV - minFOV) * amplitudeFactor;
     camera.updateProjectionMatrix();
     
     gridManager.instances.forEach(grid => {
