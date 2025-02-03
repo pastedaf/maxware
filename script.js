@@ -42,7 +42,7 @@ class GridManager {
             geometry,
             material,
             defaultSettings: {
-                audioInfluence: 0.5,
+                audioInfluence: 1.0,
                 decayRate: 0.98,
                 heightScale: 3,
                 colorMapping: 'height',
@@ -109,7 +109,7 @@ class GridManager {
         
         const settings = grid.userData.settings;
         grid.userData.controllers.push(
-            guiFolder.add(settings, 'audioInfluence', 0, 1).name("Audio Influence").step(0.1),
+            guiFolder.add(settings, 'audioInfluence', 0, 2).name("Audio Influence").step(0.1),
             guiFolder.add(settings, 'heightScale', 0.5, 5).name("Height Scale").step(0.1),
             guiFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined']).name("Color Mapping"),
             guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random']).name("Wave Pattern"),
@@ -286,7 +286,7 @@ const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
 directionalLight.position.set(5, 5, 5);
 scene.add(directionalLight);
 
-camera.position.set(20, 25, 20);
+camera.position.set(7.5, 7.5, 7.5);
 camera.lookAt(0, 0, 0);
 const gridSize = 64;
 const maxDistance = Math.sqrt(7.5 * 7.5 + 7.5 * 7.5);
@@ -375,7 +375,7 @@ function handleMouseStart(e) {
 }
 
 function handleMouseMove(e) {
-    if (!isDragging || !gridManager.currentInstance) return;
+    if (isDragging || !gridManager.currentInstance) return;
     
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -391,7 +391,6 @@ function handleMouseMove(e) {
 
 function modifyGrid(grid, point) {
     const vertices = grid.geometry.attributes.position.array;
-
     for (let i = 0; i < gridSize * gridSize; i++) {
         const x = (i % gridSize) * (15 / (gridSize - 1)) - 7.5;
         const z = Math.floor(i / gridSize) * (15 / (gridSize - 1)) - 7.5;
@@ -463,6 +462,18 @@ function updateGrid(grid) {
 
 function animate() {
     requestAnimationFrame(animate);
+    
+    // Calculate average amplitude
+    const frequencyData = audioManager.getFrequencyData('mid');
+    const averageAmplitude = frequencyData.reduce((sum, value) => sum + value, 0) / frequencyData.length;
+    
+    // Adjust camera FOV based on amplitude
+    const minFOV = 50;
+    const maxFOV = 100;
+    const amplitudeFactor = averageAmplitude / 255;
+    camera.fov = minFOV + (maxFOV - minFOV) * amplitudeFactor;
+    camera.updateProjectionMatrix();
+    
     gridManager.instances.forEach(grid => {
         if (grid.userData.settings.visible) updateGrid(grid);
     });
