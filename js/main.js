@@ -10,6 +10,7 @@ import * as dat from 'https://cdn.skypack.dev/dat.gui';
 import { GridManager } from './GridManager.js';
 import { AudioManager } from './AudioManager.js';
 import { CameraManager } from './CameraManager.js'; // Import CameraManager
+import { CameraVisualizer } from './CameraVisualizer.js'; // Import CameraVisualizer
 
 // --- Constants ---
 const GRID_SIZE = 15; // Physical size
@@ -43,6 +44,11 @@ gui.width = 300; // Make GUI slightly wider
 const audioManager = new AudioManager();
 const cameraManager = new CameraManager(); // Instantiate CameraManager
 const gridManager = new GridManager(scene, gui, GRID_SIZE, GRID_SEGMENTS);
+const cameraVisualizer = new CameraVisualizer(scene, cameraManager, { // Instantiate CameraVisualizer
+    widthSegments: 128, // Higher resolution for visualization
+    heightSegments: 96,
+    visible: false // Start hidden
+});
 // Setup transform controls *after* adding the first grid instance potentially
 // gridManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Moved after initial instance add
 
@@ -124,11 +130,18 @@ const settings = {
 
 const audioSettings = {
     source: 'None', // 'File', 'Microphone'
-    cameraMotionEnabled: false,
     triggerFileInput: () => {
         document.getElementById('audioInput').click();
     },
     lastFileLoaded: '',
+};
+
+// Separate settings object for camera interactions
+const cameraSettings = {
+    cameraMotionEnabled: false, // For grid influence
+    cameraVisualizationEnabled: false, // For particle display
+    visualizationDepthScale: cameraVisualizer.options.depthScale,
+    visualizationParticleSize: cameraVisualizer.options.particleSize,
 };
 
 
@@ -145,9 +158,9 @@ globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Rotate Speed").onCh
 // globalFolder.open(); // Keep closed by default
 
 // Audio & Camera Folder
-const audioFolder = gui.addFolder('Audio & Camera');
-const sourceController = audioFolder.add(audioSettings, 'source', ['None', 'File', 'Microphone']).name('Audio Source');
-const fileButtonController = audioFolder.add(audioSettings, 'triggerFileInput').name('Load Audio File');
+const audioCameraFolder = gui.addFolder('Audio & Camera');
+const sourceController = audioCameraFolder.add(audioSettings, 'source', ['None', 'File', 'Microphone']).name('Audio Source');
+const fileButtonController = audioCameraFolder.add(audioSettings, 'triggerFileInput').name('Load Audio File');
 fileButtonController.domElement.style.display = audioSettings.source === 'File' ? 'block' : 'none'; // Show initially based on default
 
 sourceController.onChange(async (value) => {
@@ -169,7 +182,8 @@ sourceController.onChange(async (value) => {
     }
 });
 
-audioFolder.add(audioSettings, 'cameraMotionEnabled').name('Enable Camera Motion')
+// Camera Interaction Controls
+audioCameraFolder.add(cameraSettings, 'cameraMotionEnabled').name('Enable Grid Motion')
     .onChange(async (enabled) => {
         if (enabled) {
             const success = await cameraManager.initCamera();
@@ -177,19 +191,61 @@ audioFolder.add(audioSettings, 'cameraMotionEnabled').name('Enable Camera Motion
                 cameraManager.start();
             } else {
                 // Revert the toggle if initialization failed
-                audioSettings.cameraMotionEnabled = false;
+                cameraSettings.cameraMotionEnabled = false;
                  // Find the controller and update its display
-                 audioFolder.__controllers.forEach(c => {
+                 audioCameraFolder.__controllers.forEach(c => {
                      if (c.property === 'cameraMotionEnabled') c.updateDisplay();
                  });
+                 // Also disable visualization if camera failed
+                 if (cameraSettings.cameraVisualizationEnabled) {
+                     cameraSettings.cameraVisualizationEnabled = false;
+                     cameraVisualizer.setVisible(false);
+                     audioCameraFolder.__controllers.forEach(c => {
+                         if (c.property === 'cameraVisualizationEnabled') c.updateDisplay();
+                     });
+                 }
             }
         } else {
-            cameraManager.stop();
-            // Optionally stop the stream completely to release camera:
-            // cameraManager.stopStream();
+            cameraManager.stop(); // Stop processing, but keep stream potentially for visualization
+            // If visualization is also disabled, we can stop the stream fully
+            if (!cameraSettings.cameraVisualizationEnabled) {
+                 cameraManager.stopStream(); // Release camera fully
+            }
         }
     });
-audioFolder.open(); // Keep open by default
+
+audioCameraFolder.add(cameraSettings, 'cameraVisualizationEnabled').name('Enable Visualization')
+    .onChange(async (enabled) => {
+        if (enabled) {
+            // Try to initialize camera if not already active
+            if (!cameraManager.isInitialized || !cameraManager.stream) {
+                 const success = await cameraManager.initCamera();
+                 if (!success) {
+                     cameraSettings.cameraVisualizationEnabled = false;
+                     audioCameraFolder.__controllers.forEach(c => {
+                         if (c.property === 'cameraVisualizationEnabled') c.updateDisplay();
+                     });
+                     return; // Exit if camera failed
+                 }
+            }
+            // Start processing if not already running (needed for visualization updates)
+             if (!cameraManager.isRunning) {
+                 cameraManager.start(); // Start processing frames
+             }
+            cameraVisualizer.setVisible(true);
+        } else {
+            cameraVisualizer.setVisible(false);
+            // If grid motion is also disabled, stop the camera stream fully
+            if (!cameraSettings.cameraMotionEnabled) {
+                 cameraManager.stop(); // Stop processing
+                 cameraManager.stopStream(); // Release camera fully
+            }
+        }
+    });
+audioCameraFolder.add(cameraSettings, 'visualizationDepthScale', 1, 20).name('Vis Depth Scale').onChange(val => cameraVisualizer.setDepthScale(val));
+audioCameraFolder.add(cameraSettings, 'visualizationParticleSize', 0.01, 0.5).name('Vis Particle Size').onChange(val => cameraVisualizer.setParticleSize(val));
+
+audioCameraFolder.open(); // Keep open by default
 
 
 // Post Processing Folder
@@ -259,7 +315,10 @@ window.addEventListener('mousedown', (e) => {
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(gridManager.instances);
+    // Intersect grids, but ignore camera visualizer points
+    const intersectableObjects = gridManager.instances;
+    const intersects = raycaster.intersectObjects(intersectableObjects);
+
 
     if (intersects.length > 0) {
         // Don't select if transform controls are being dragged
@@ -363,7 +422,8 @@ function updateGrid(grid, motionScore) {
     let effectiveHeightScale = settings.heightScale;
     let effectiveDecayRate = settings.decayRate;
 
-    if (audioSettings.cameraMotionEnabled && settings.motionInfluenceFactor > 0) {
+    // Use cameraSettings.cameraMotionEnabled to check if motion influence is active
+    if (cameraSettings.cameraMotionEnabled && settings.motionInfluenceFactor > 0) {
         const influence = motionScore * settings.motionInfluenceFactor;
         // Motion increases height scale
         effectiveHeightScale = settings.heightScale * (1 + influence);
@@ -499,11 +559,21 @@ function animate(timestamp) {
     const deltaTime = (timestamp - lastTimestamp) * 0.001; // Delta time in seconds
     lastTimestamp = timestamp;
 
-    // --- Get Motion Score ---
+    // --- Get Motion Score (only if enabled) ---
     let motionScore = 0;
-    if (audioSettings.cameraMotionEnabled && cameraManager.isRunning) {
+    if (cameraSettings.cameraMotionEnabled && cameraManager.isRunning) {
         motionScore = cameraManager.getMotionScore(); // Processes frame internally
     }
+
+    // --- Update Camera Visualization (if enabled) ---
+    if (cameraSettings.cameraVisualizationEnabled) {
+        // Ensure CameraManager processes a frame if it's not already running for motion detection
+        if (!cameraManager.isRunning && cameraManager.isInitialized) {
+             cameraManager.processFrame(); // Process frame specifically for visualization
+        }
+        cameraVisualizer.update(); // Update particle positions/colors
+    }
+
 
     // --- Global Effects (like Camera FOV based on overall audio) ---
     if (audioSettings.source !== 'None') {
