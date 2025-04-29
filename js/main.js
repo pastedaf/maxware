@@ -9,12 +9,13 @@ import * as dat from 'https://cdn.skypack.dev/dat.gui';
 
 import { GridManager } from './GridManager.js';
 import { AudioManager } from './AudioManager.js';
+import { CameraManager } from './CameraManager.js'; // Import CameraManager
 
 // --- Constants ---
 const GRID_SIZE = 15; // Physical size
 const GRID_SEGMENTS = 63; // Number of segments (vertices = segments + 1)
-const VERTICES_PER_SIDE = GRID_SEGMENTS + 1;
-const TOTAL_VERTICES = VERTICES_PER_SIDE * VERTICES_PER_SIDE;
+// const VERTICES_PER_SIDE = GRID_SEGMENTS + 1; // Calculated in GridManager
+// const TOTAL_VERTICES = VERTICES_PER_SIDE * VERTICES_PER_SIDE; // Calculated in GridManager
 
 // --- Basic Setup ---
 const scene = new THREE.Scene();
@@ -36,11 +37,14 @@ orbitControls.autoRotateSpeed = 1.0;
 
 // --- GUI ---
 const gui = new dat.GUI();
+gui.width = 300; // Make GUI slightly wider
 
 // --- Managers ---
 const audioManager = new AudioManager();
+const cameraManager = new CameraManager(); // Instantiate CameraManager
 const gridManager = new GridManager(scene, gui, GRID_SIZE, GRID_SEGMENTS);
-gridManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Pass orbitControls
+// Setup transform controls *after* adding the first grid instance potentially
+// gridManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Moved after initial instance add
 
 // --- Post Processing ---
 const composer = new EffectComposer(renderer);
@@ -87,19 +91,23 @@ composer.addPass(fxaaPass);
 
 
 // --- Lighting ---
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4); // Slightly less ambient
 scene.add(ambientLight);
-const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-directionalLight.position.set(5, 5, 5);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); // Slightly less directional
+directionalLight.position.set(5, 10, 7); // Adjust position
 scene.add(directionalLight);
 
 // --- Initial State ---
-camera.position.set(GRID_SIZE / 2, GRID_SIZE / 2, GRID_SIZE / 2); // Adjust camera based on grid size
+camera.position.set(GRID_SIZE * 0.7, GRID_SIZE * 0.7, GRID_SIZE * 0.7); // Adjust camera based on grid size
 camera.lookAt(0, 0, 0);
 
-// --- Global Settings ---
+// --- Global Settings & Audio/Camera Control ---
 const settings = {
+    // General View/Control Settings
     transformMode: 'translate',
+    autoRotateSpeed: orbitControls.autoRotateSpeed,
+    globalBackgroundColor: scene.background.getHex(),
+    // Post Processing Settings
     bloomStrength: bloomPass.strength,
     bloomThreshold: bloomPass.threshold,
     bloomRadius: bloomPass.radius,
@@ -107,19 +115,84 @@ const settings = {
     pixelateEnabled: true,
     fxaaEnabled: true,
     pixelSize: pixelatePass.uniforms.pixelSize.value,
-    autoRotateSpeed: orbitControls.autoRotateSpeed,
+    // Instance Management Functions (bound to GUI)
     cloneCurrent: () => {
-        if (gridManager.currentInstance) {
-            gridManager.addInstance(gridManager.currentInstance);
-        } else {
-            gridManager.addInstance(); // Add default if none selected
-        }
+        gridManager.addInstance(gridManager.currentInstance); // Clone selected or add default if none
     },
     deleteCurrent: () => gridManager.deleteCurrent(),
-    globalBackgroundColor: scene.background.getHex(),
 };
 
+const audioSettings = {
+    source: 'None', // 'File', 'Microphone'
+    cameraMotionEnabled: false,
+    triggerFileInput: () => {
+        document.getElementById('audioInput').click();
+    },
+    lastFileLoaded: '',
+};
+
+
 // --- GUI Setup ---
+
+// Global Settings Folder
+const globalFolder = gui.addFolder('Global Settings');
+globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
+globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
+    .name("Transform Mode")
+    .onChange(val => gridManager.setTransformMode(val));
+globalFolder.add(orbitControls, 'autoRotate').name("Auto Rotate");
+globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
+// globalFolder.open(); // Keep closed by default
+
+// Audio & Camera Folder
+const audioFolder = gui.addFolder('Audio & Camera');
+const sourceController = audioFolder.add(audioSettings, 'source', ['None', 'File', 'Microphone']).name('Audio Source');
+const fileButtonController = audioFolder.add(audioSettings, 'triggerFileInput').name('Load Audio File');
+fileButtonController.domElement.style.display = audioSettings.source === 'File' ? 'block' : 'none'; // Show initially based on default
+
+sourceController.onChange(async (value) => {
+    fileButtonController.domElement.style.display = value === 'File' ? 'block' : 'none'; // Toggle button visibility
+    audioManager.stop(); // Stop previous source
+
+    if (value === 'Microphone') {
+        try {
+            await audioManager.useMicrophone();
+        } catch (error) {
+            console.error("Failed to start microphone via GUI:", error);
+            audioSettings.source = 'None'; // Revert selection on error
+            sourceController.updateDisplay(); // Update GUI
+        }
+    } else if (value === 'File') {
+        // If a file was previously loaded, maybe replay it? Or force selection.
+        // For now, just trigger the input. If the user cancels, source remains 'File'.
+        audioSettings.triggerFileInput();
+    }
+});
+
+audioFolder.add(audioSettings, 'cameraMotionEnabled').name('Enable Camera Motion')
+    .onChange(async (enabled) => {
+        if (enabled) {
+            const success = await cameraManager.initCamera();
+            if (success) {
+                cameraManager.start();
+            } else {
+                // Revert the toggle if initialization failed
+                audioSettings.cameraMotionEnabled = false;
+                 // Find the controller and update its display
+                 audioFolder.__controllers.forEach(c => {
+                     if (c.property === 'cameraMotionEnabled') c.updateDisplay();
+                 });
+            }
+        } else {
+            cameraManager.stop();
+            // Optionally stop the stream completely to release camera:
+            // cameraManager.stopStream();
+        }
+    });
+audioFolder.open(); // Keep open by default
+
+
+// Post Processing Folder
 const ppFolder = gui.addFolder('Post Processing');
 ppFolder.add(settings, 'pixelateEnabled').name("Pixelate").onChange(val => pixelatePass.enabled = val);
 ppFolder.add(settings, 'pixelSize', 1, 32).step(1).onChange(val => pixelatePass.uniforms.pixelSize.value = val);
@@ -128,60 +201,52 @@ ppFolder.add(settings, 'bloomEnabled').name("Bloom").onChange(val => bloomPass.e
 ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength = val);
 ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
 ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
-ppFolder.open();
+// ppFolder.open(); // Keep closed by default
 
-const viewFolder = gui.addFolder('View Controls');
-viewFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
-    .name("Transform Mode")
-    .onChange(val => gridManager.setTransformMode(val));
-viewFolder.add(orbitControls, 'autoRotate').name("Auto Rotate");
-viewFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
-viewFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
-viewFolder.open();
-
+// Instance Management Folder
 const instanceManagement = gui.addFolder('Instance Management');
-instanceManagement.add(settings, 'cloneCurrent').name("Clone Current/Add New");
+instanceManagement.add(settings, 'cloneCurrent').name("Clone Selected / Add New");
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
-instanceManagement.open();
+instanceManagement.open(); // Keep open
 
 // --- Event Listeners ---
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 let isDragging = false; // Used for mouse interaction logic
 
-// Audio Source Selection
+// Hidden File Input Listener
 document.getElementById('audioInput').addEventListener('change', async (e) => {
     if (e.target.files.length > 0) {
+        const file = e.target.files[0];
+        audioSettings.lastFileLoaded = file.name; // Store filename
         try {
-            await audioManager.loadAudio(e.target.files[0]);
+            await audioManager.loadAudio(file);
             audioManager.play();
+            // Ensure GUI reflects File source if user selected via button
+            if (audioSettings.source !== 'File') {
+                 audioSettings.source = 'File';
+                 sourceController.updateDisplay();
+                 fileButtonController.domElement.style.display = 'block';
+            }
         } catch (error) {
             console.error("Failed to load or play audio:", error);
-            // Optionally reset UI or provide feedback
-             document.getElementById('audioInput').value = ''; // Clear input
-             document.querySelector('input[name="audioSource"][value="file"]').checked = false; // Uncheck radio
+            audioSettings.source = 'None'; // Revert on error
+            sourceController.updateDisplay();
+            fileButtonController.domElement.style.display = 'none';
+            document.getElementById('audioInput').value = ''; // Clear input
         }
+    } else {
+         // User cancelled file selection
+         if (audioSettings.source === 'File') {
+             // If source was already File (e.g., clicked button again), revert to None
+             // or keep it as File but without playback? Let's revert.
+             audioSettings.source = 'None';
+             sourceController.updateDisplay();
+             fileButtonController.domElement.style.display = 'none';
+         }
     }
 });
 
-document.querySelectorAll('input[name="audioSource"]').forEach(input => {
-    input.addEventListener('change', async (e) => {
-        if (e.target.checked) {
-            if (e.target.value === 'mic') {
-                try {
-                    await audioManager.useMicrophone();
-                } catch (error) {
-                     console.error("Failed to start microphone:", error);
-                     e.target.checked = false; // Uncheck if failed
-                }
-            } else if (e.target.value === 'file') {
-                // Stop mic/current playback before opening file dialog
-                audioManager.stop();
-                document.getElementById('audioInput').click();
-            }
-        }
-    });
-});
 
 // Mouse Interaction for Grid Selection / Modification
 window.addEventListener('mousedown', (e) => {
@@ -231,11 +296,6 @@ window.addEventListener('mousemove', (e) => {
 
 window.addEventListener('mouseup', () => {
     isDragging = false;
-    // Re-enable orbit controls if they were disabled by transform controls
-    // (The transform controls listener should handle this, but double-check)
-    // if (!orbitControls.enabled && !gridManager.transformControls?.dragging) {
-    //     orbitControls.enabled = true;
-    // }
 });
 
 
@@ -253,10 +313,15 @@ window.addEventListener('resize', () => {
 function modifyGrid(grid, point) {
     const vertices = grid.geometry.attributes.position.array;
     const targetHeights = grid.userData.targetHeights;
-    const size = grid.geometry.parameters.width; // Use actual geometry size
-    const segments = grid.geometry.parameters.widthSegments; // Use actual segments
+    const settings = grid.userData.settings; // Get instance-specific settings
+    const size = grid.geometry.parameters.width;
+    const segments = grid.geometry.parameters.widthSegments;
     const verticesPerSide = segments + 1;
     const halfSize = size / 2;
+
+    const modificationRadius = settings.pokeRadius;
+    const pokeStrength = settings.pokeStrength;
+    const maxPokeHeight = settings.heightScale * 1.5; // Limit poke height relative to scale
 
     for (let i = 0; i < targetHeights.length; i++) {
         // Calculate vertex position in local grid space (plane is in XY initially)
@@ -268,9 +333,6 @@ function modifyGrid(grid, point) {
         const dy = y - point.y; // Compare with point.y which corresponds to local Z
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        const modificationRadius = 1.5; // How far the "poke" reaches
-        const maxPokeHeight = 5; // Max height added by poking
-        const pokeStrength = 0.2; // Amount added per frame on hover
 
         if (distance < modificationRadius) {
             const falloff = 1 - (distance / modificationRadius);
@@ -282,7 +344,7 @@ function modifyGrid(grid, point) {
     // No need to set needsUpdate here, updateGrid does it every frame
 }
 
-function updateGrid(grid) {
+function updateGrid(grid, motionScore) {
     const settings = grid.userData.settings;
     if (!settings.visible) return; // Skip update if not visible
 
@@ -295,8 +357,31 @@ function updateGrid(grid) {
     const segments = grid.geometry.parameters.widthSegments;
     const verticesPerSide = segments + 1;
     const halfSize = size / 2;
-    // Calculate max distance from center for radial pattern normalization
     const maxDistance = Math.sqrt(halfSize * halfSize + halfSize * halfSize);
+
+    // --- Calculate effective parameters based on motion ---
+    let effectiveHeightScale = settings.heightScale;
+    let effectiveDecayRate = settings.decayRate;
+
+    if (audioSettings.cameraMotionEnabled && settings.motionInfluenceFactor > 0) {
+        const influence = motionScore * settings.motionInfluenceFactor;
+        // Motion increases height scale
+        effectiveHeightScale = settings.heightScale * (1 + influence);
+        // Motion makes decay *slower* (closer to 1.0)
+        effectiveDecayRate = settings.decayRate + (1.0 - settings.decayRate) * influence * 0.5; // Subtle effect
+        effectiveDecayRate = Math.min(effectiveDecayRate, 0.999); // Clamp
+    }
+
+    // --- Get full frequency data for frequencyBands color mode ---
+    let lowAmp = 0, midAmp = 0, highAmp = 0;
+     if (settings.colorMapping === 'frequencyBands') {
+         lowAmp = audioManager.getAverageAmplitude('low') / 255; // Normalize
+         midAmp = audioManager.getAverageAmplitude('mid') / 255;
+         highAmp = audioManager.getAverageAmplitude('high') / 255;
+     }
+
+    // --- Time for sine wave pattern ---
+    const time = performance.now() * 0.002; // Simple time factor
 
     for (let i = 0; i < targetHeights.length; i++) {
         // Calculate vertex position in local grid space (plane is in XY initially)
@@ -304,43 +389,67 @@ function updateGrid(grid) {
         const y = Math.floor(i / verticesPerSide) * (size / segments) - halfSize; // Corresponds to Z in world after rotation
 
         let audioValue = 0;
-        if (frequencyData.length > 0) {
+        let patternHeight = 0; // Height contribution from non-audio patterns
+
+        if (frequencyData.length > 0 && audioSettings.source !== 'None') {
             switch (settings.wavePattern) {
                 case 'radial':
                     const distance = Math.sqrt(x * x + y * y);
-                    // Normalize distance and map to frequency data index
                     const normalizedDistance = Math.min(distance / maxDistance, 1.0);
                     const index = Math.floor(normalizedDistance * (frequencyData.length - 1));
                     audioValue = frequencyData[index] || 0;
                     break;
                 case 'linear':
-                    // Map vertex index linearly to frequency data index
                     audioValue = frequencyData[i % frequencyData.length] || 0;
                     break;
                 case 'random':
-                    // Assign a random frequency value
                     audioValue = frequencyData[Math.floor(Math.random() * frequencyData.length)] || 0;
                     break;
+                case 'sineWave':
+                    const distFromCenter = Math.sqrt(x * x + y * y);
+                    // Wave propagates outwards, influenced by average mid-frequency amplitude
+                    const avgMidAmp = audioManager.getAverageAmplitude('mid') / 255; // Normalized 0-1
+                    patternHeight = Math.sin(distFromCenter * (1 + avgMidAmp * 2) - time * (1 + avgMidAmp * 5)) * (0.5 + avgMidAmp);
+                    // Use overall average amplitude for audioValue in this mode
+                    audioValue = audioManager.getAverageAmplitude(settings.frequencyRange);
+                    break;
+                case 'checkerboard':
+                    // Determine if the vertex is on a 'black' or 'white' square
+                    const scale = 4.0; // Adjust size of checkers
+                    const checkX = Math.floor((x + halfSize) / scale);
+                    const checkY = Math.floor((y + halfSize) / scale);
+                    if ((checkX + checkY) % 2 === 0) {
+                        // Use low frequency for 'black' squares
+                        audioValue = audioManager.getAverageAmplitude('low');
+                    } else {
+                        // Use high frequency for 'white' squares
+                        audioValue = audioManager.getAverageAmplitude('high');
+                    }
+                    break;
+                default:
+                     audioValue = frequencyData[i % frequencyData.length] || 0; // Fallback
             }
         }
 
         // Calculate height based on audio and apply influence/scale
-        const audioHeight = (audioValue / 255) * settings.heightScale * settings.audioInfluence;
+        const audioHeight = (audioValue / 255) * effectiveHeightScale * settings.audioInfluence;
+
+        // Add pattern height (only non-zero for sineWave currently)
+        const totalPatternHeight = audioHeight + (patternHeight * effectiveHeightScale * settings.audioInfluence);
 
         // Apply decay to target height (from mouse interaction)
-        targetHeights[i] *= settings.decayRate;
-        // Prevent target height from becoming excessively small noise
-        if (targetHeights[i] < 0.01) targetHeights[i] = 0;
+        targetHeights[i] *= effectiveDecayRate;
+        if (targetHeights[i] < 0.01) targetHeights[i] = 0; // Floor small values
 
-        // Final vertex height is the max of decayed target height and current audio height
-        // The vertex array stores X, Y, Z. For PlaneGeometry rotated -PI/2 on X, Z becomes height.
-        const finalHeight = Math.max(targetHeights[i], audioHeight);
+        // Final vertex height is the max of decayed target height and current pattern height
+        const finalHeight = Math.max(targetHeights[i], totalPatternHeight);
         vertices[i * 3 + 2] = finalHeight; // Set the Z coordinate (which acts as height)
 
         // --- Color Calculation ---
         let colorFactor = 0;
-        const normalizedHeight = finalHeight / settings.heightScale; // Normalize height relative to scale
+        const normalizedHeight = finalHeight / effectiveHeightScale; // Normalize height relative to scale
         const normalizedAudio = audioValue / 255;
+        const tempColor = new THREE.Color(); // Reuse color object
 
         switch (settings.colorMapping) {
             case 'height':
@@ -350,22 +459,30 @@ function updateGrid(grid) {
                 colorFactor = THREE.MathUtils.clamp(normalizedAudio, 0, 1);
                 break;
             case 'combined':
-                // Average normalized height and audio, then clamp
                 colorFactor = THREE.MathUtils.clamp((normalizedHeight + normalizedAudio) / 2, 0, 1);
                 break;
+             case 'frequencyBands':
+                 // Mix colors based on normalized low/mid/high amplitudes
+                 tempColor.setRGB(0,0,0); // Start black
+                 tempColor.lerp(settings.lowColor, lowAmp);
+                 tempColor.lerp(settings.midColor, midAmp); // Lerp towards mid based on midAmp
+                 tempColor.lerp(settings.highColor, highAmp); // Lerp towards high based on highAmp
+                 // This approach might need tweaking for good visual results
+                 break; // Skip standard lerp below
         }
 
-        // Interpolate color based on the factor
-        const color = new THREE.Color();
-        if (colorFactor < 0.5) {
-            color.lerpColors(settings.lowColor, settings.midColor, colorFactor * 2);
-        } else {
-            color.lerpColors(settings.midColor, settings.highColor, (colorFactor - 0.5) * 2);
+        // Interpolate color based on the factor (unless handled by frequencyBands)
+        if (settings.colorMapping !== 'frequencyBands') {
+            if (colorFactor < 0.5) {
+                tempColor.lerpColors(settings.lowColor, settings.midColor, colorFactor * 2);
+            } else {
+                tempColor.lerpColors(settings.midColor, settings.highColor, (colorFactor - 0.5) * 2);
+            }
         }
 
-        colors[i * 3] = color.r;
-        colors[i * 3 + 1] = color.g;
-        colors[i * 3 + 2] = color.b;
+        colors[i * 3] = tempColor.r;
+        colors[i * 3 + 1] = tempColor.g;
+        colors[i * 3 + 2] = tempColor.b;
     }
 
     grid.geometry.attributes.position.needsUpdate = true;
@@ -375,30 +492,43 @@ function updateGrid(grid) {
 
 
 // --- Animation Loop ---
-function animate() {
+let lastTimestamp = 0;
+function animate(timestamp) {
     requestAnimationFrame(animate);
 
-    // Get average amplitude for potential global effects (like camera FOV)
-    const averageAmplitude = audioManager.getAverageAmplitude('mid'); // Use mid range for FOV effect
+    const deltaTime = (timestamp - lastTimestamp) * 0.001; // Delta time in seconds
+    lastTimestamp = timestamp;
 
-    // Adjust camera FOV based on amplitude (subtle effect)
-    const minFOV = 65;
-    const maxFOV = 85;
-    const amplitudeFactor = THREE.MathUtils.clamp(averageAmplitude / 128, 0, 1); // Normalize (0-255 -> 0-1, using 128 as midpoint)
-    camera.fov = THREE.MathUtils.lerp(minFOV, maxFOV, amplitudeFactor);
-    camera.updateProjectionMatrix();
+    // --- Get Motion Score ---
+    let motionScore = 0;
+    if (audioSettings.cameraMotionEnabled && cameraManager.isRunning) {
+        motionScore = cameraManager.getMotionScore(); // Processes frame internally
+    }
 
-    // Update each grid instance
+    // --- Global Effects (like Camera FOV based on overall audio) ---
+    if (audioSettings.source !== 'None') {
+        const averageAmplitude = audioManager.getAverageAmplitude('mid'); // Use mid range for FOV effect
+        const minFOV = 70; // Adjusted range
+        const maxFOV = 80;
+        const amplitudeFactor = THREE.MathUtils.clamp(averageAmplitude / 128, 0, 1); // Normalize (0-255 -> 0-1, using 128 as midpoint)
+        // Smooth FOV change using deltaTime
+        const targetFOV = THREE.MathUtils.lerp(minFOV, maxFOV, amplitudeFactor);
+        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFOV, Math.min(deltaTime * 5.0, 1.0)); // Adjust lerp speed (5.0)
+        camera.updateProjectionMatrix();
+    }
+
+
+    // --- Update each grid instance ---
     gridManager.instances.forEach(grid => {
-        updateGrid(grid); // Pass the grid instance to the update function
+        updateGrid(grid, motionScore); // Pass motion score
     });
 
     orbitControls.update(); // Update orbit controls (handles damping, auto-rotate)
-    // Note: TransformControls are updated implicitly by the renderer/composer
 
     composer.render(); // Render scene with post-processing
 }
 
 // --- Initialization ---
 gridManager.addInstance(); // Add the initial grid
-animate(); // Start the animation loop
+gridManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Setup controls *after* first instance exists
+animate(0); // Start the animation loop

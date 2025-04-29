@@ -10,58 +10,7 @@
             padding: 0;
             overflow: hidden;
             height: 100%;
-            display: flex;
             background-color: #111; /* Match scene background */
-            color: #eee; /* Light text for controls */
-            font-family: sans-serif;
-        }
-        #controls {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            z-index: 10; /* Ensure controls are above canvas */
-            background: rgba(40, 40, 40, 0.8); /* Darker semi-transparent background */
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-            max-width: 200px; /* Limit width */
-        }
-        #controls div {
-            display: flex;
-            flex-direction: column; /* Stack radio buttons vertically */
-            gap: 8px;
-        }
-        #controls label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 14px;
-            cursor: pointer;
-        }
-        #controls input[type="radio"] {
-             margin: 0;
-        }
-        #audioInput {
-            display: none; /* Hide the actual file input */
-        }
-        /* Style the label associated with the file input like a button */
-        #fileInputLabel {
-            display: inline-block; /* Or block */
-            padding: 8px 12px;
-            background-color: #444;
-            color: #eee;
-            border: 1px solid #666;
-            border-radius: 4px;
-            cursor: pointer;
-            text-align: center;
-            margin-top: 5px; /* Add some space */
-            font-size: 13px;
-        }
-        #fileInputLabel:hover {
-            background-color: #555;
         }
         #gridCanvas {
             width: 100%;
@@ -70,75 +19,33 @@
         }
         /* Style dat.gui */
         .dg.main {
-             /* Example: move GUI to top right */
-             /* top: 10px !important; */
-             /* right: 10px !important; */
-             /* left: auto !important; */
+             /* Position GUI top-right */
+             top: 10px !important;
+             right: 10px !important;
+             left: auto !important;
+        }
+        /* Hide the actual file input visually */
+        #audioInput {
+            width: 0.1px;
+            height: 0.1px;
+            opacity: 0;
+            overflow: hidden;
+            position: absolute;
+            z-index: -1;
         }
     </style>
 </head>
 <body>
-    <div id="controls">
-        <div>
-            <label>
-                <input type="radio" name="audioSource" value="file" id="radioFile"> File
-            </label>
-            <!-- Use a label to trigger the hidden file input -->
-            <label for="audioInput" id="fileInputLabel">Choose Audio File...</label>
-            <input type="file" id="audioInput" accept="audio/*">
+    <!-- Hidden video element for camera input -->
+    <video id="webcamFeed" playsinline autoplay muted style="display:none; position: absolute; top: 0; left: 0;"></video>
 
-            <label>
-                <input type="radio" name="audioSource" value="mic" id="radioMic"> Microphone
-            </label>
-        </div>
-    </div>
+    <!-- Hidden file input, triggered by GUI button -->
+    <input type="file" id="audioInput" accept="audio/*">
 
     <canvas id="gridCanvas"></canvas>
 
     <!-- Load main script as module -->
     <script type="module" src="js/main.js"></script>
 
-    <script>
-        // Ensure no radio button is selected on window load initially
-        // and handle file input display logic
-        window.addEventListener('load', () => {
-            const radioFile = document.getElementById('radioFile');
-            const radioMic = document.getElementById('radioMic');
-            const fileInputLabel = document.getElementById('fileInputLabel');
-
-            radioFile.checked = false;
-            radioMic.checked = false;
-
-            // Show file input label only when 'File' is selected
-            fileInputLabel.style.display = 'none';
-
-            radioFile.addEventListener('change', () => {
-                if (radioFile.checked) {
-                    fileInputLabel.style.display = 'block'; // Or 'inline-block'
-                }
-            });
-            radioMic.addEventListener('change', () => {
-                 if (radioMic.checked) {
-                    fileInputLabel.style.display = 'none';
-                 }
-            });
-
-            // If the user cancels the file dialog after clicking the radio button,
-            // uncheck the radio button.
-            const audioInput = document.getElementById('audioInput');
-            audioInput.addEventListener('change', () => {
-                if (audioInput.files.length === 0 && radioFile.checked) {
-                    // User likely cancelled - keep radio checked but maybe provide feedback?
-                    // Or uncheck: radioFile.checked = false; fileInputLabel.style.display = 'none';
-                }
-            });
-             // Add click listener to label to ensure input is cleared if label is clicked when file radio is checked
-             fileInputLabel.addEventListener('click', () => {
-                 if(radioFile.checked) {
-                    audioInput.value = ''; // Clear previous selection
-                 }
-             });
-        });
-    </script>
 </body>
 </html>
