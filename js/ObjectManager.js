@@ -432,8 +432,10 @@ export class ObjectManager {
             if (this.currentInstance && this.transformControls) {
                 this.transformControls.attach(this.currentInstance);
                 this.transformControls.visible = true; // Explicitly set visible
+                this.transformControls.getHelper().visible = true; // Also ensure helper is visible
             } else if (this.transformControls) {
                  this.transformControls.visible = false; // Hide if nothing selected
+                 this.transformControls.getHelper().visible = false; // Also hide helper
             }
 
             console.log(`Instance ${instanceToDelete.uuid} (${instanceToDelete.userData.settings.type}) deleted.`);
@@ -454,6 +456,7 @@ export class ObjectManager {
                 console.log(`Attaching transform controls to ${instance.uuid}`); // Debug log
                 this.transformControls.attach(instance);
                 this.transformControls.visible = true; // Explicitly set visible on attach
+                this.transformControls.getHelper().visible = true; // Ensure helper is visible too
             } else {
                  console.warn("Transform controls not available for attachment."); // Debug log
             }
@@ -471,6 +474,7 @@ export class ObjectManager {
         this.orbitControls = orbitControls; // Store reference
         this.transformControls = new TransformControls(camera, renderer.domElement);
         this.transformControls.visible = false; // Start hidden
+        this.transformControls.getHelper().visible = false; // Start helper hidden too
 
         this.transformControls.addEventListener('dragging-changed', event => {
             if (this.orbitControls) {
@@ -486,9 +490,9 @@ export class ObjectManager {
             }
         });
 
-        // Add the transform controls gizmo to the scene
-        this.scene.add(this.transformControls);
-        console.log("Transform controls added to scene."); // Debug log
+        // Add the transform controls HELPER to the scene
+        this.scene.add(this.transformControls.getHelper());
+        console.log("Transform controls helper added to scene."); // Debug log
 
         // Select the first instance if available after setup
         if (this.instances.length > 0) {
@@ -742,7 +746,8 @@ export class ObjectManager {
         console.log("Disposing ObjectManager...");
         if (this.transformControls) {
             this.transformControls.dispose();
-            this.scene.remove(this.transformControls);
+            // Remove the helper from the scene
+            this.scene.remove(this.transformControls.getHelper());
         }
         // Use deleteCurrent repeatedly to ensure proper cleanup
         while (this.instances.length > 0) {
