@@ -15,8 +15,7 @@ import { CameraVisualizer } from './CameraVisualizer.js'; // Import CameraVisual
 // --- Constants ---
 const GRID_SIZE = 15; // Physical size
 const GRID_SEGMENTS = 63; // Number of segments (vertices = segments + 1)
-// const VERTICES_PER_SIDE = GRID_SEGMENTS + 1; // Calculated in GridManager
-// const TOTAL_VERTICES = VERTICES_PER_SIDE * VERTICES_PER_SIDE; // Calculated in GridManager
+const VIDEO_ELEMENT_ID = 'webcamFeed'; // ID of the video element in HTML
 
 // --- Basic Setup ---
 const scene = new THREE.Scene();
@@ -42,7 +41,7 @@ gui.width = 300; // Make GUI slightly wider
 
 // --- Managers ---
 const audioManager = new AudioManager();
-const cameraManager = new CameraManager(); // Instantiate CameraManager
+const cameraManager = new CameraManager(VIDEO_ELEMENT_ID); // Instantiate CameraManager with video element ID
 const gridManager = new GridManager(scene, gui, GRID_SIZE, GRID_SEGMENTS);
 const cameraVisualizer = new CameraVisualizer(scene, cameraManager, { // Instantiate CameraVisualizer
     widthSegments: 128, // Higher resolution for visualization
@@ -129,15 +128,20 @@ const settings = {
 };
 
 const audioSettings = {
-    source: 'None', // 'File', 'Microphone'
-    triggerFileInput: () => {
+    source: 'None', // 'None', 'Audio File', 'Microphone', 'Video File'
+    triggerAudioFileInput: () => {
         document.getElementById('audioInput').click();
     },
-    lastFileLoaded: '',
+    lastAudioFileLoaded: '',
 };
 
 // Separate settings object for camera interactions
 const cameraSettings = {
+    source: 'None', // 'None', 'Webcam', 'Video File' - Tracks camera source specifically
+    triggerVideoFileInput: () => {
+        document.getElementById('videoInput').click();
+    },
+    lastVideoFileLoaded: '',
     cameraMotionEnabled: false, // For grid influence
     cameraVisualizationEnabled: false, // For particle display
     visualizationDepthScale: cameraVisualizer.options.depthScale,
@@ -159,13 +163,15 @@ globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Rotate Speed").onCh
 
 // Audio & Camera Folder
 const audioCameraFolder = gui.addFolder('Audio & Camera');
-const sourceController = audioCameraFolder.add(audioSettings, 'source', ['None', 'File', 'Microphone']).name('Audio Source');
-const fileButtonController = audioCameraFolder.add(audioSettings, 'triggerFileInput').name('Load Audio File');
-fileButtonController.domElement.style.display = audioSettings.source === 'File' ? 'block' : 'none'; // Show initially based on default
 
-sourceController.onChange(async (value) => {
-    fileButtonController.domElement.style.display = value === 'File' ? 'block' : 'none'; // Toggle button visibility
-    audioManager.stop(); // Stop previous source
+// --- Audio Source Controls ---
+const audioSourceController = audioCameraFolder.add(audioSettings, 'source', ['None', 'Audio File', 'Microphone']).name('Audio Source');
+const audioFileButtonController = audioCameraFolder.add(audioSettings, 'triggerAudioFileInput').name('Load Audio File');
+audioFileButtonController.domElement.style.display = audioSettings.source === 'Audio File' ? 'block' : 'none'; // Show initially based on default
+
+audioSourceController.onChange(async (value) => {
+    audioFileButtonController.domElement.style.display = value === 'Audio File' ? 'block' : 'none'; // Toggle button visibility
+    audioManager.stop(); // Stop previous audio source
 
     if (value === 'Microphone') {
         try {
@@ -173,43 +179,90 @@ sourceController.onChange(async (value) => {
         } catch (error) {
             console.error("Failed to start microphone via GUI:", error);
             audioSettings.source = 'None'; // Revert selection on error
-            sourceController.updateDisplay(); // Update GUI
+            audioSourceController.updateDisplay(); // Update GUI
         }
-    } else if (value === 'File') {
+    } else if (value === 'Audio File') {
         // If a file was previously loaded, maybe replay it? Or force selection.
-        // For now, just trigger the input. If the user cancels, source remains 'File'.
-        audioSettings.triggerFileInput();
+        // For now, just trigger the input. If the user cancels, source remains 'Audio File'.
+        audioSettings.triggerAudioFileInput();
     }
 });
 
-// Camera Interaction Controls
+// --- Camera Source Controls ---
+const cameraSourceController = audioCameraFolder.add(cameraSettings, 'source', ['None', 'Webcam', 'Video File']).name('Camera Source');
+const videoFileButtonController = audioCameraFolder.add(cameraSettings, 'triggerVideoFileInput').name('Load Video File');
+videoFileButtonController.domElement.style.display = cameraSettings.source === 'Video File' ? 'block' : 'none'; // Show initially based on default
+
+cameraSourceController.onChange(async (value) => {
+    videoFileButtonController.domElement.style.display = value === 'Video File' ? 'block' : 'none'; // Toggle button visibility
+    // Reset camera manager only if switching *away* from a source or to a *different* source type
+    if (cameraManager.isInitialized && cameraManager.sourceType !== value.toLowerCase()) {
+        cameraManager.resetSource();
+    }
+
+    // If enabling Webcam or Video File, and motion/viz is enabled, start it
+    if (value === 'Webcam') {
+        const success = await cameraManager.initCamera();
+        if (!success) {
+            cameraSettings.source = 'None'; // Revert on failure
+            cameraSourceController.updateDisplay();
+        } else if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) {
+            cameraManager.start(); // Start if needed
+        }
+    } else if (value === 'Video File') {
+        // Trigger file input. Loading and starting happens in the input's event listener.
+        cameraSettings.triggerVideoFileInput();
+    } else { // value === 'None'
+        // Stop and reset the camera manager if source is set to None
+        cameraManager.resetSource();
+        // Also disable motion/visualization toggles if source is None
+        if (cameraSettings.cameraMotionEnabled) {
+            cameraSettings.cameraMotionEnabled = false;
+            audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
+        }
+        if (cameraSettings.cameraVisualizationEnabled) {
+            cameraSettings.cameraVisualizationEnabled = false;
+            cameraVisualizer.setVisible(false);
+            audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
+        }
+    }
+});
+
+
+// --- Camera Interaction Controls ---
 audioCameraFolder.add(cameraSettings, 'cameraMotionEnabled').name('Enable Grid Motion')
     .onChange(async (enabled) => {
         if (enabled) {
-            const success = await cameraManager.initCamera();
-            if (success) {
-                cameraManager.start();
-            } else {
-                // Revert the toggle if initialization failed
+            // Only try to init/start if a source is selected
+            if (cameraSettings.source === 'Webcam') {
+                if (!cameraManager.isInitialized || cameraManager.sourceType !== 'webcam') {
+                    const success = await cameraManager.initCamera();
+                    if (!success) {
+                        cameraSettings.cameraMotionEnabled = false;
+                        audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
+                        return; // Exit if init failed
+                    }
+                }
+                cameraManager.start(); // Start webcam processing
+            } else if (cameraSettings.source === 'Video File') {
+                if (!cameraManager.isInitialized || cameraManager.sourceType !== 'video') {
+                    // Need to load a video first
+                    alert("Please load a video file first using the 'Load Video File' button.");
+                    cameraSettings.cameraMotionEnabled = false;
+                    audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
+                    return;
+                }
+                cameraManager.start(); // Start video file processing
+            } else { // Source is 'None'
+                alert("Please select a Camera Source (Webcam or Video File) first.");
                 cameraSettings.cameraMotionEnabled = false;
-                 // Find the controller and update its display
-                 audioCameraFolder.__controllers.forEach(c => {
-                     if (c.property === 'cameraMotionEnabled') c.updateDisplay();
-                 });
-                 // Also disable visualization if camera failed
-                 if (cameraSettings.cameraVisualizationEnabled) {
-                     cameraSettings.cameraVisualizationEnabled = false;
-                     cameraVisualizer.setVisible(false);
-                     audioCameraFolder.__controllers.forEach(c => {
-                         if (c.property === 'cameraVisualizationEnabled') c.updateDisplay();
-                     });
-                 }
+                audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
+                return;
             }
         } else {
-            cameraManager.stop(); // Stop processing, but keep stream potentially for visualization
-            // If visualization is also disabled, we can stop the stream fully
+            // Stop processing, but don't reset source unless visualization is also off
             if (!cameraSettings.cameraVisualizationEnabled) {
-                 cameraManager.stopStream(); // Release camera fully
+                cameraManager.stop(); // Stop processing only
             }
         }
     });
@@ -217,28 +270,38 @@ audioCameraFolder.add(cameraSettings, 'cameraMotionEnabled').name('Enable Grid M
 audioCameraFolder.add(cameraSettings, 'cameraVisualizationEnabled').name('Enable Visualization')
     .onChange(async (enabled) => {
         if (enabled) {
-            // Try to initialize camera if not already active
-            if (!cameraManager.isInitialized || !cameraManager.stream) {
-                 const success = await cameraManager.initCamera();
-                 if (!success) {
-                     cameraSettings.cameraVisualizationEnabled = false;
-                     audioCameraFolder.__controllers.forEach(c => {
-                         if (c.property === 'cameraVisualizationEnabled') c.updateDisplay();
-                     });
-                     return; // Exit if camera failed
-                 }
+            // Only try to init/start if a source is selected
+            if (cameraSettings.source === 'Webcam') {
+                if (!cameraManager.isInitialized || cameraManager.sourceType !== 'webcam') {
+                    const success = await cameraManager.initCamera();
+                    if (!success) {
+                        cameraSettings.cameraVisualizationEnabled = false;
+                        audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
+                        return; // Exit if init failed
+                    }
+                }
+                cameraManager.start(); // Start webcam processing (needed for visualization updates)
+                cameraVisualizer.setVisible(true);
+            } else if (cameraSettings.source === 'Video File') {
+                if (!cameraManager.isInitialized || cameraManager.sourceType !== 'video') {
+                    alert("Please load a video file first using the 'Load Video File' button.");
+                    cameraSettings.cameraVisualizationEnabled = false;
+                    audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
+                    return;
+                }
+                cameraManager.start(); // Start video file processing
+                cameraVisualizer.setVisible(true);
+            } else { // Source is 'None'
+                alert("Please select a Camera Source (Webcam or Video File) first.");
+                cameraSettings.cameraVisualizationEnabled = false;
+                audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
+                return;
             }
-            // Start processing if not already running (needed for visualization updates)
-             if (!cameraManager.isRunning) {
-                 cameraManager.start(); // Start processing frames
-             }
-            cameraVisualizer.setVisible(true);
         } else {
             cameraVisualizer.setVisible(false);
-            // If grid motion is also disabled, stop the camera stream fully
+            // Stop processing only if grid motion is also disabled
             if (!cameraSettings.cameraMotionEnabled) {
                  cameraManager.stop(); // Stop processing
-                 cameraManager.stopStream(); // Release camera fully
             }
         }
     });
@@ -270,35 +333,78 @@ const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 let isDragging = false; // Used for mouse interaction logic
 
-// Hidden File Input Listener
+// Hidden Audio File Input Listener
 document.getElementById('audioInput').addEventListener('change', async (e) => {
     if (e.target.files.length > 0) {
         const file = e.target.files[0];
-        audioSettings.lastFileLoaded = file.name; // Store filename
+        audioSettings.lastAudioFileLoaded = file.name; // Store filename
         try {
             await audioManager.loadAudio(file);
             audioManager.play();
-            // Ensure GUI reflects File source if user selected via button
-            if (audioSettings.source !== 'File') {
-                 audioSettings.source = 'File';
-                 sourceController.updateDisplay();
-                 fileButtonController.domElement.style.display = 'block';
+            // Ensure GUI reflects Audio File source if user selected via button
+            if (audioSettings.source !== 'Audio File') {
+                 audioSettings.source = 'Audio File';
+                 audioSourceController.updateDisplay();
+                 audioFileButtonController.domElement.style.display = 'block';
             }
         } catch (error) {
             console.error("Failed to load or play audio:", error);
             audioSettings.source = 'None'; // Revert on error
-            sourceController.updateDisplay();
-            fileButtonController.domElement.style.display = 'none';
-            document.getElementById('audioInput').value = ''; // Clear input
+            audioSourceController.updateDisplay();
+            audioFileButtonController.domElement.style.display = 'none';
+        } finally {
+             document.getElementById('audioInput').value = ''; // Clear input regardless of success/fail
         }
     } else {
          // User cancelled file selection
-         if (audioSettings.source === 'File') {
-             // If source was already File (e.g., clicked button again), revert to None
-             // or keep it as File but without playback? Let's revert.
+         if (audioSettings.source === 'Audio File') {
+             // If source was already Audio File (e.g., clicked button again), revert to None
              audioSettings.source = 'None';
-             sourceController.updateDisplay();
-             fileButtonController.domElement.style.display = 'none';
+             audioSourceController.updateDisplay();
+             audioFileButtonController.domElement.style.display = 'none';
+         }
+    }
+});
+
+// Hidden Video File Input Listener
+document.getElementById('videoInput').addEventListener('change', async (e) => {
+    if (e.target.files.length > 0) {
+        const file = e.target.files[0];
+        cameraSettings.lastVideoFileLoaded = file.name; // Store filename
+        try {
+            const success = await cameraManager.loadVideo(file);
+            if (success) {
+                // Ensure GUI reflects Video File source
+                if (cameraSettings.source !== 'Video File') {
+                    cameraSettings.source = 'Video File';
+                    cameraSourceController.updateDisplay();
+                    videoFileButtonController.domElement.style.display = 'block';
+                }
+                // If motion or visualization is enabled, start the video
+                if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) {
+                    cameraManager.start();
+                }
+            } else {
+                 throw new Error("CameraManager failed to load video."); // Throw error to be caught below
+            }
+        } catch (error) {
+            console.error("Failed to load or start video:", error);
+            alert(`Failed to load video: ${error.message}`);
+            cameraSettings.source = 'None'; // Revert on error
+            cameraSourceController.updateDisplay();
+            videoFileButtonController.domElement.style.display = 'none';
+            cameraManager.resetSource(); // Ensure cleanup
+        } finally {
+            document.getElementById('videoInput').value = ''; // Clear input
+        }
+    } else {
+         // User cancelled file selection
+         if (cameraSettings.source === 'Video File') {
+             // If source was already Video File, revert to None
+             cameraSettings.source = 'None';
+             cameraSourceController.updateDisplay();
+             videoFileButtonController.domElement.style.display = 'none';
+             cameraManager.resetSource(); // Clean up if they cancel
          }
     }
 });
@@ -423,7 +529,8 @@ function updateGrid(grid, motionScore) {
     let effectiveDecayRate = settings.decayRate;
 
     // Use cameraSettings.cameraMotionEnabled to check if motion influence is active
-    if (cameraSettings.cameraMotionEnabled && settings.motionInfluenceFactor > 0) {
+    // Also check if cameraManager is actually running (has a valid source and is processing)
+    if (cameraSettings.cameraMotionEnabled && cameraManager.isRunning && settings.motionInfluenceFactor > 0) {
         const influence = motionScore * settings.motionInfluenceFactor;
         // Motion increases height scale
         effectiveHeightScale = settings.heightScale * (1 + influence);
@@ -451,6 +558,7 @@ function updateGrid(grid, motionScore) {
         let audioValue = 0;
         let patternHeight = 0; // Height contribution from non-audio patterns
 
+        // Only use audio data if an audio source is active
         if (frequencyData.length > 0 && audioSettings.source !== 'None') {
             switch (settings.wavePattern) {
                 case 'radial':
@@ -524,10 +632,15 @@ function updateGrid(grid, motionScore) {
              case 'frequencyBands':
                  // Mix colors based on normalized low/mid/high amplitudes
                  tempColor.setRGB(0,0,0); // Start black
-                 tempColor.lerp(settings.lowColor, lowAmp);
-                 tempColor.lerp(settings.midColor, midAmp); // Lerp towards mid based on midAmp
-                 tempColor.lerp(settings.highColor, highAmp); // Lerp towards high based on highAmp
-                 // This approach might need tweaking for good visual results
+                 // Only apply colors if an audio source is active
+                 if (audioSettings.source !== 'None') {
+                     tempColor.lerp(settings.lowColor, lowAmp);
+                     tempColor.lerp(settings.midColor, midAmp); // Lerp towards mid based on midAmp
+                     tempColor.lerp(settings.highColor, highAmp); // Lerp towards high based on highAmp
+                 } else {
+                     // Default to midColor if no audio? Or maybe lowColor?
+                     tempColor.copy(settings.midColor);
+                 }
                  break; // Skip standard lerp below
         }
 
@@ -559,19 +672,24 @@ function animate(timestamp) {
     const deltaTime = (timestamp - lastTimestamp) * 0.001; // Delta time in seconds
     lastTimestamp = timestamp;
 
-    // --- Get Motion Score (only if enabled) ---
+    // --- Get Motion Score (only if enabled and camera is running) ---
     let motionScore = 0;
     if (cameraSettings.cameraMotionEnabled && cameraManager.isRunning) {
         motionScore = cameraManager.getMotionScore(); // Processes frame internally
     }
 
-    // --- Update Camera Visualization (if enabled) ---
-    if (cameraSettings.cameraVisualizationEnabled) {
-        // Ensure CameraManager processes a frame if it's not already running for motion detection
-        if (!cameraManager.isRunning && cameraManager.isInitialized) {
-             cameraManager.processFrame(); // Process frame specifically for visualization
+    // --- Update Camera Visualization (if enabled and camera is running) ---
+    if (cameraSettings.cameraVisualizationEnabled && cameraManager.isRunning) {
+        // CameraManager.getMotionScore() already processes the frame if motion is enabled.
+        // If only visualization is enabled, we might need an explicit process call.
+        // Let's ensure processFrame is called if visualization is on but motion is off.
+        if (!cameraSettings.cameraMotionEnabled) {
+            cameraManager.processFrame(); // Process frame specifically for visualization
         }
         cameraVisualizer.update(); // Update particle positions/colors
+    } else if (!cameraSettings.cameraVisualizationEnabled && cameraVisualizer.points && cameraVisualizer.points.visible) {
+        // Ensure visualizer is hidden if disabled
+        cameraVisualizer.setVisible(false);
     }
 
 

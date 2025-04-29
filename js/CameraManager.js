@@ -6,6 +6,10 @@ export class CameraManager {
             // Create one dynamically as a fallback? Or throw error?
             // For now, let's log the error and proceed, but it will likely fail later.
             this.videoElement = document.createElement('video'); // Fallback, might not work well
+            this.videoElement.id = videoElementId; // Assign ID if created dynamically
+            document.body.appendChild(this.videoElement); // Append to body to make it potentially usable
+            this.videoElement.style.display = 'none'; // Keep it hidden
+            console.warn(`CameraManager: Created fallback video element with ID "${videoElementId}".`);
         }
 
         // Ensure necessary video attributes are set
@@ -35,6 +39,10 @@ export class CameraManager {
 
     // Helper to update internal canvas sizes
     updateCanvasDimensions(width, height) {
+        // Ensure width and height are valid numbers > 0
+        width = Math.max(1, Math.floor(width));
+        height = Math.max(1, Math.floor(height));
+
         if (this.currentFrameCanvas.width !== width || this.currentFrameCanvas.height !== height) {
             this.currentFrameCanvas.width = width;
             this.currentFrameCanvas.height = height;
@@ -69,18 +77,39 @@ export class CameraManager {
             this.videoElement.srcObject = this.stream;
             this.videoElement.muted = true; // Mute webcam audio by default
             this.videoElement.loop = false; // No loop for webcam stream
+            this.videoElement.autoplay = true; // Try to autoplay webcam
+
             // Wait for metadata to ensure dimensions are available
             await new Promise((resolve, reject) => {
                 this.videoElement.onloadedmetadata = () => {
-                    this.updateCanvasDimensions(this.videoElement.videoWidth, this.videoElement.videoHeight);
-                    resolve();
+                    // Check for valid dimensions before updating canvas
+                    if (this.videoElement.videoWidth > 0 && this.videoElement.videoHeight > 0) {
+                        this.updateCanvasDimensions(this.videoElement.videoWidth, this.videoElement.videoHeight);
+                        resolve();
+                    } else {
+                        // This can happen if the stream ends abruptly or metadata is incomplete
+                        console.warn("Webcam loaded metadata but dimensions are invalid (0).");
+                        // Don't resolve yet, wait for playing or error
+                    }
                 };
                 this.videoElement.onerror = (e) => reject(new Error("Error loading webcam video metadata."));
-                // Start playing to trigger metadata loading
+
+                // Use 'playing' event as a more reliable indicator that dimensions are ready
+                this.videoElement.onplaying = () => {
+                     if (this.videoElement.videoWidth > 0 && this.videoElement.videoHeight > 0) {
+                         this.updateCanvasDimensions(this.videoElement.videoWidth, this.videoElement.videoHeight);
+                         resolve(); // Resolve promise once playing starts and dimensions are valid
+                     } else {
+                         console.warn("Webcam started playing but dimensions are invalid (0).");
+                         // Consider rejecting or handling this case
+                     }
+                };
+
+                // Start playing to trigger metadata loading and playing event
                  this.videoElement.play().catch(e => {
                      // Play might fail due to autoplay policies, but metadata might still load
                      console.warn("Webcam play() call initially failed (may resolve on user interaction):", e);
-                     // Don't reject here, let onloadedmetadata handle success
+                     // Don't reject here, let onloadedmetadata or onplaying handle success
                  });
             });
 
@@ -105,21 +134,27 @@ export class CameraManager {
         try {
             this.videoObjectURL = URL.createObjectURL(file);
             this.videoElement.src = this.videoObjectURL;
-            this.videoElement.muted = false; // Allow video file audio (though we don't use it)
+            this.videoElement.muted = false; // Allow video file audio (though we don't use it for processing)
             this.videoElement.loop = true; // Loop video files
+            this.videoElement.autoplay = false; // Don't autoplay video files, wait for start()
 
             // Wait for metadata
             await new Promise((resolve, reject) => {
                 this.videoElement.onloadedmetadata = () => {
-                    this.updateCanvasDimensions(this.videoElement.videoWidth, this.videoElement.videoHeight);
-                    resolve();
+                     if (this.videoElement.videoWidth > 0 && this.videoElement.videoHeight > 0) {
+                        this.updateCanvasDimensions(this.videoElement.videoWidth, this.videoElement.videoHeight);
+                        resolve();
+                    } else {
+                        console.warn("Video file loaded metadata but dimensions are invalid (0).");
+                        reject(new Error(`Video file "${file.name}" has invalid dimensions.`));
+                    }
                 };
                  this.videoElement.onerror = (e) => {
                      console.error("Error loading video meta", e);
                      reject(new Error(`Error loading video file meta ${file.name}`));
                  };
                  // Load initiates metadata loading for file sources
-                 this.videoElement.load();
+                 this.videoElement.load(); // Important for file sources
             });
 
             this.isInitialized = true;
@@ -141,51 +176,72 @@ export class CameraManager {
     start() {
          if (!this.isInitialized) {
              console.warn("CameraManager: Source not initialized. Cannot start.");
-             return;
+             return false; // Indicate failure
          }
          if (this.isRunning) {
              // console.log("CameraManager: Processing already running.");
-             return;
+             return true; // Indicate already running (success)
          }
 
          // Ensure video element is playing
          if (this.videoElement.paused) {
-            this.videoElement.play().then(() => {
-                console.log(`CameraManager: Playback started for ${this.sourceType}.`);
-                this.isRunning = true;
-                console.log("CameraManager: Processing started.");
-                // Initialize last frame *after* playback starts successfully
-                // Use a short delay to ensure the first frame is drawn correctly
-                setTimeout(() => {
-                    if (!this.isRunning) return; // Check if stopped again quickly
-                    try {
-                        this.currentFrameCtx.drawImage(this.videoElement, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
-                        this.lastFrameCtx.drawImage(this.currentFrameCanvas, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
-                        console.log("CameraManager: Initial frame captured for diffing.");
-                    } catch (e) {
-                        console.error("CameraManager: Error capturing initial frame:", e);
-                        // Potentially stop running if frame capture fails critically
-                        // this.stop();
-                    }
-                }, 100); // 100ms delay, adjust if needed
+            const playPromise = this.videoElement.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    console.log(`CameraManager: Playback started for ${this.sourceType}.`);
+                    this.isRunning = true;
+                    console.log("CameraManager: Processing started.");
+                    // Initialize last frame *after* playback starts successfully
+                    // Use a short delay to ensure the first frame is drawn correctly
+                    setTimeout(() => {
+                        if (!this.isRunning) return; // Check if stopped again quickly
+                        try {
+                            // Ensure dimensions are valid before drawing
+                            if (this.currentFrameCanvas.width > 0 && this.currentFrameCanvas.height > 0) {
+                                this.currentFrameCtx.drawImage(this.videoElement, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
+                                this.lastFrameCtx.drawImage(this.currentFrameCanvas, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
+                                console.log("CameraManager: Initial frame captured for diffing.");
+                            } else {
+                                console.warn("CameraManager: Cannot capture initial frame, canvas dimensions invalid.");
+                            }
+                        } catch (e) {
+                            console.error("CameraManager: Error capturing initial frame:", e);
+                            // Potentially stop running if frame capture fails critically
+                            // this.stop();
+                        }
+                    }, 100); // 100ms delay, adjust if needed
 
-            }).catch(e => {
-                console.error(`CameraManager: Error starting playback for ${this.sourceType}:`, e);
-                // Don't set isRunning true if play fails
-                alert(`Could not start video playback. Error: ${e.name}. Try interacting with the page first.`);
-            });
+                }).catch(e => {
+                    console.error(`CameraManager: Error starting playback for ${this.sourceType}:`, e);
+                    // Don't set isRunning true if play fails
+                    alert(`Could not start video playback. Error: ${e.name}. Try interacting with the page first.`);
+                    this.isRunning = false; // Ensure isRunning is false on error
+                });
+            } else {
+                // If play() doesn't return a promise (older browsers?), assume sync success/failure? Risky.
+                // Or rely on events like 'playing'. For simplicity, let's assume modern browsers.
+                console.warn("CameraManager: videoElement.play() did not return a promise.");
+                // We might be running, or not. Let's assume not for safety.
+                this.isRunning = false;
+                return false; // Indicate potential failure
+            }
          } else {
              // Already playing, just start the processing flag
              this.isRunning = true;
              console.log("CameraManager: Processing started (playback was already active).");
              // Capture initial frame immediately if already playing
              try {
-                 this.currentFrameCtx.drawImage(this.videoElement, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
-                 this.lastFrameCtx.drawImage(this.currentFrameCanvas, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
+                  if (this.currentFrameCanvas.width > 0 && this.currentFrameCanvas.height > 0) {
+                     this.currentFrameCtx.drawImage(this.videoElement, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
+                     this.lastFrameCtx.drawImage(this.currentFrameCanvas, 0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
+                 } else {
+                      console.warn("CameraManager: Cannot capture initial frame (already playing), canvas dimensions invalid.");
+                 }
              } catch (e) {
                   console.error("CameraManager: Error capturing initial frame (already playing):", e);
              }
          }
+         return true; // Indicate success or already running
     }
 
     // Stops ONLY the processing loop flag
@@ -213,12 +269,19 @@ export class CameraManager {
         }
 
         // Pause and clear video element sources
-        this.videoElement.pause();
-        this.videoElement.srcObject = null;
-        this.videoElement.src = '';
-        // Reset event listeners to prevent memory leaks if needed, though assigning null sources often suffices
-        this.videoElement.onloadedmetadata = null;
-        this.videoElement.onerror = null;
+        if (this.videoElement) {
+            this.videoElement.pause();
+            this.videoElement.srcObject = null;
+            this.videoElement.src = '';
+            // Detach event listeners to prevent memory leaks
+            this.videoElement.onloadedmetadata = null;
+            this.videoElement.onerror = null;
+            this.videoElement.onplaying = null; // Make sure to clear this too
+            // Reset attributes that might interfere
+            this.videoElement.removeAttribute('autoplay');
+            this.videoElement.removeAttribute('loop');
+            this.videoElement.removeAttribute('muted');
+        }
 
 
         this.stream = null;
@@ -228,14 +291,19 @@ export class CameraManager {
         this.lastMotionScore = 0;
 
         // Optionally reset canvas? Or keep last frame? Let's clear it.
-        // this.currentFrameCtx.clearRect(0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
-        // this.lastFrameCtx.clearRect(0, 0, this.lastFrameCanvas.width, this.lastFrameCanvas.height);
+        // Check if context exists before clearing
+        // if (this.currentFrameCtx) {
+        //     this.currentFrameCtx.clearRect(0, 0, this.currentFrameCanvas.width, this.currentFrameCanvas.height);
+        // }
+        // if (this.lastFrameCtx) {
+        //     this.lastFrameCtx.clearRect(0, 0, this.lastFrameCanvas.width, this.lastFrameCanvas.height);
+        // }
     }
 
     // Processes a single frame for motion detection or visualization data
     processFrame() {
-        // Only process if running, initialized, and video has data
-        if (!this.isRunning || !this.isInitialized || this.videoElement.readyState < this.videoElement.HAVE_CURRENT_DATA || this.videoElement.videoWidth === 0) {
+        // Only process if running, initialized, and video has data and valid dimensions
+        if (!this.isRunning || !this.isInitialized || !this.videoElement || this.videoElement.readyState < this.videoElement.HAVE_CURRENT_DATA || this.videoElement.videoWidth <= 0 || this.videoElement.videoHeight <= 0 || this.currentFrameCanvas.width <= 0 || this.currentFrameCanvas.height <= 0) {
             // Don't reset motion score here, let getMotionScore return the last valid one or 0
             // this.lastMotionScore = 0;
             return;
@@ -256,6 +324,9 @@ export class CameraManager {
 
             // Simple pixel difference calculation (grayscale average)
             for (let i = 0; i < data1.length; i += 4) {
+                // Check if pixel data exists (might not if canvas is tiny)
+                if (i + 2 >= data1.length || i + 2 >= data2.length) break;
+
                 const gray1 = (data1[i] + data1[i + 1] + data1[i + 2]) / 3;
                 const gray2 = (data2[i] + data2[i + 1] + data2[i + 2]) / 3;
                 diff += Math.abs(gray1 - gray2);
@@ -278,7 +349,12 @@ export class CameraManager {
                 console.warn("CameraManager: Canvas tainted, cannot process frame for motion detection.");
                 this.lastMotionScore = 0; // Reset score if we can't process
                 // Consider stopping processing if this error persists?
-            } else {
+                this.stop(); // Stop processing if we hit a security error
+            } else if (e instanceof DOMException && e.name === 'InvalidStateError') {
+                 console.warn("CameraManager: InvalidStateError during frame processing (video dimensions might be 0). Skipping frame.");
+                 this.lastMotionScore = 0; // Reset score
+            }
+             else {
                 console.error("CameraManager: Error processing frame:", e);
                 this.lastMotionScore = 0; // Reset score on other errors
             }

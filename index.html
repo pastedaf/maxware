@@ -24,8 +24,8 @@
              right: 10px !important;
              left: auto !important;
         }
-        /* Hide the actual file input visually */
-        #audioInput {
+        /* Hide the actual file inputs visually */
+        #audioInput, #videoInput {
             width: 0.1px;
             height: 0.1px;
             opacity: 0;
@@ -39,8 +39,9 @@
     <!-- Hidden video element for camera input -->
     <video id="webcamFeed" playsinline autoplay muted style="display:none; position: absolute; top: 0; left: 0;"></video>
 
-    <!-- Hidden file input, triggered by GUI button -->
+    <!-- Hidden file inputs, triggered by GUI buttons -->
     <input type="file" id="audioInput" accept="audio/*">
+    <input type="file" id="videoInput" accept="video/*"> <!-- Added video input -->
 
     <canvas id="gridCanvas"></canvas>
 
