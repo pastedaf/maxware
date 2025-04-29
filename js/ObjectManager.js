@@ -396,6 +396,7 @@ export class ObjectManager {
             // Detach transform controls first
             if (this.transformControls && this.transformControls.object === instanceToDelete) {
                 this.transformControls.detach();
+                // Visibility is handled automatically by detach/attach
             }
 
             // Remove GUI folder and its controllers
@@ -431,11 +432,11 @@ export class ObjectManager {
             this.currentInstance = this.instances.length > 0 ? this.instances[Math.max(0, index - 1)] : null;
             if (this.currentInstance && this.transformControls) {
                 this.transformControls.attach(this.currentInstance);
-                this.transformControls.visible = true; // Explicitly set visible
-                this.transformControls.getHelper().visible = true; // Also ensure helper is visible
-            } else if (this.transformControls) {
-                 this.transformControls.visible = false; // Hide if nothing selected
-                 this.transformControls.getHelper().visible = false; // Also hide helper
+                // No need to manually set visibility, attach handles it
+            } else if (this.transformControls && !this.currentInstance) {
+                 // If no instance is selected, detach should have hidden it.
+                 // If detach wasn't called (e.g., deleting last item), explicitly hide.
+                 this.transformControls.detach(); // Ensure it's detached and hidden
             }
 
             console.log(`Instance ${instanceToDelete.uuid} (${instanceToDelete.userData.settings.type}) deleted.`);
@@ -455,8 +456,7 @@ export class ObjectManager {
             if (this.transformControls) {
                 console.log(`Attaching transform controls to ${instance.uuid}`); // Debug log
                 this.transformControls.attach(instance);
-                this.transformControls.visible = true; // Explicitly set visible on attach
-                this.transformControls.getHelper().visible = true; // Ensure helper is visible too
+                // No need to manually set visibility, attach handles it
             } else {
                  console.warn("Transform controls not available for attachment."); // Debug log
             }
@@ -473,8 +473,7 @@ export class ObjectManager {
     setupTransformControls(camera, renderer, orbitControls) {
         this.orbitControls = orbitControls; // Store reference
         this.transformControls = new TransformControls(camera, renderer.domElement);
-        this.transformControls.visible = false; // Start hidden
-        this.transformControls.getHelper().visible = false; // Start helper hidden too
+        // Visibility is handled by attach/detach, start detached (invisible)
 
         this.transformControls.addEventListener('dragging-changed', event => {
             if (this.orbitControls) {
@@ -490,13 +489,16 @@ export class ObjectManager {
             }
         });
 
-        // Add the transform controls HELPER to the scene
-        this.scene.add(this.transformControls.getHelper());
-        console.log("Transform controls helper added to scene."); // Debug log
+        // Add the transform controls OBJECT to the scene for interaction
+        this.scene.add(this.transformControls); // <<< CORRECTED LINE
+        console.log("Transform controls object added to scene."); // Debug log
 
         // Select the first instance if available after setup
         if (this.instances.length > 0) {
             this.selectInstance(this.instances[0]);
+        } else {
+            // Ensure controls are hidden if no initial instance exists
+            this.transformControls.detach();
         }
     }
 
@@ -746,8 +748,8 @@ export class ObjectManager {
         console.log("Disposing ObjectManager...");
         if (this.transformControls) {
             this.transformControls.dispose();
-            // Remove the helper from the scene
-            this.scene.remove(this.transformControls.getHelper());
+            // Remove the main control object from the scene
+            this.scene.remove(this.transformControls); // <<< CORRECTED LINE
         }
         // Use deleteCurrent repeatedly to ensure proper cleanup
         while (this.instances.length > 0) {
