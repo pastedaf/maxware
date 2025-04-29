@@ -7,14 +7,14 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import * as dat from 'https://cdn.skypack.dev/dat.gui';
 
-import { GridManager } from './GridManager.js';
+import { ObjectManager } from './ObjectManager.js'; // Import ObjectManager
 import { AudioManager } from './AudioManager.js';
-import { CameraManager } from './CameraManager.js'; // Import CameraManager
-import { CameraVisualizer } from './CameraVisualizer.js'; // Import CameraVisualizer
+import { CameraManager } from './CameraManager.js';
+import { CameraVisualizer } from './CameraVisualizer.js';
 
 // --- Constants ---
-const GRID_SIZE = 15; // Physical size
-const GRID_SEGMENTS = 63; // Number of segments (vertices = segments + 1)
+const GRID_SIZE = 15; // Physical size for grids
+const GRID_SEGMENTS = 63; // Number of segments for grids
 const VIDEO_ELEMENT_ID = 'webcamFeed'; // ID of the video element in HTML
 
 // --- Basic Setup ---
@@ -41,15 +41,13 @@ gui.width = 300; // Make GUI slightly wider
 
 // --- Managers ---
 const audioManager = new AudioManager();
-const cameraManager = new CameraManager(VIDEO_ELEMENT_ID); // Instantiate CameraManager with video element ID
-const gridManager = new GridManager(scene, gui, GRID_SIZE, GRID_SEGMENTS);
-const cameraVisualizer = new CameraVisualizer(scene, cameraManager, { // Instantiate CameraVisualizer
-    widthSegments: 128, // Higher resolution for visualization
+const cameraManager = new CameraManager(VIDEO_ELEMENT_ID);
+const objectManager = new ObjectManager(scene, gui, GRID_SIZE, GRID_SEGMENTS); // Instantiate ObjectManager
+const cameraVisualizer = new CameraVisualizer(scene, cameraManager, {
+    widthSegments: 128,
     heightSegments: 96,
-    visible: false // Start hidden
+    visible: false
 });
-// Setup transform controls *after* adding the first grid instance potentially
-// gridManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Moved after initial instance add
 
 // --- Post Processing ---
 const composer = new EffectComposer(renderer);
@@ -57,9 +55,7 @@ composer.addPass(new RenderPass(scene, camera));
 
 const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    1.5, // strength
-    0.4, // threshold
-    0.85 // radius
+    1.5, 0.4, 0.85
 );
 composer.addPass(bloomPass);
 
@@ -96,14 +92,14 @@ composer.addPass(fxaaPass);
 
 
 // --- Lighting ---
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.4); // Slightly less ambient
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
 scene.add(ambientLight);
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); // Slightly less directional
-directionalLight.position.set(5, 10, 7); // Adjust position
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.position.set(5, 10, 7);
 scene.add(directionalLight);
 
 // --- Initial State ---
-camera.position.set(GRID_SIZE * 0.7, GRID_SIZE * 0.7, GRID_SIZE * 0.7); // Adjust camera based on grid size
+camera.position.set(GRID_SIZE * 0.7, GRID_SIZE * 0.7, GRID_SIZE * 1.2); // Adjust camera based on grid size, pull back slightly
 camera.lookAt(0, 0, 0);
 
 // --- Global Settings & Audio/Camera Control ---
@@ -121,29 +117,27 @@ const settings = {
     fxaaEnabled: true,
     pixelSize: pixelatePass.uniforms.pixelSize.value,
     // Instance Management Functions (bound to GUI)
-    cloneCurrent: () => {
-        gridManager.addInstance(gridManager.currentInstance); // Clone selected or add default if none
-    },
-    deleteCurrent: () => gridManager.deleteCurrent(),
+    addGrid: () => objectManager.addInstance('grid'), // Add Grid function
+    addPointCloud: () => objectManager.addInstance('pointcloud'), // Add Point Cloud function
+    deleteCurrent: () => objectManager.deleteCurrent(),
 };
 
 const audioSettings = {
-    source: 'None', // 'None', 'Audio File', 'Microphone', 'Video File'
+    source: 'None',
     triggerAudioFileInput: () => {
         document.getElementById('audioInput').click();
     },
     lastAudioFileLoaded: '',
 };
 
-// Separate settings object for camera interactions
 const cameraSettings = {
-    source: 'None', // 'None', 'Webcam', 'Video File' - Tracks camera source specifically
+    source: 'None',
     triggerVideoFileInput: () => {
         document.getElementById('videoInput').click();
     },
     lastVideoFileLoaded: '',
-    cameraMotionEnabled: false, // For grid influence
-    cameraVisualizationEnabled: false, // For particle display
+    cameraMotionEnabled: false,
+    cameraVisualizationEnabled: false,
     visualizationDepthScale: cameraVisualizer.options.depthScale,
     visualizationParticleSize: cameraVisualizer.options.particleSize,
 };
@@ -156,66 +150,41 @@ const globalFolder = gui.addFolder('Global Settings');
 globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
 globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
-    .onChange(val => gridManager.setTransformMode(val));
+    .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
 globalFolder.add(orbitControls, 'autoRotate').name("Auto Rotate");
 globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
-// globalFolder.open(); // Keep closed by default
+// globalFolder.open();
 
 // Audio & Camera Folder
 const audioCameraFolder = gui.addFolder('Audio & Camera');
-
 // --- Audio Source Controls ---
 const audioSourceController = audioCameraFolder.add(audioSettings, 'source', ['None', 'Audio File', 'Microphone']).name('Audio Source');
 const audioFileButtonController = audioCameraFolder.add(audioSettings, 'triggerAudioFileInput').name('Load Audio File');
-audioFileButtonController.domElement.style.display = audioSettings.source === 'Audio File' ? 'block' : 'none'; // Show initially based on default
-
+audioFileButtonController.domElement.style.display = audioSettings.source === 'Audio File' ? 'block' : 'none';
 audioSourceController.onChange(async (value) => {
-    audioFileButtonController.domElement.style.display = value === 'Audio File' ? 'block' : 'none'; // Toggle button visibility
-    audioManager.stop(); // Stop previous audio source
-
+    audioFileButtonController.domElement.style.display = value === 'Audio File' ? 'block' : 'none';
+    audioManager.stop();
     if (value === 'Microphone') {
-        try {
-            await audioManager.useMicrophone();
-        } catch (error) {
+        try { await audioManager.useMicrophone(); } catch (error) {
             console.error("Failed to start microphone via GUI:", error);
-            audioSettings.source = 'None'; // Revert selection on error
-            audioSourceController.updateDisplay(); // Update GUI
+            audioSettings.source = 'None'; audioSourceController.updateDisplay();
         }
-    } else if (value === 'Audio File') {
-        // If a file was previously loaded, maybe replay it? Or force selection.
-        // For now, just trigger the input. If the user cancels, source remains 'Audio File'.
-        audioSettings.triggerAudioFileInput();
-    }
+    } else if (value === 'Audio File') { audioSettings.triggerAudioFileInput(); }
 });
-
 // --- Camera Source Controls ---
 const cameraSourceController = audioCameraFolder.add(cameraSettings, 'source', ['None', 'Webcam', 'Video File']).name('Camera Source');
 const videoFileButtonController = audioCameraFolder.add(cameraSettings, 'triggerVideoFileInput').name('Load Video File');
-videoFileButtonController.domElement.style.display = cameraSettings.source === 'Video File' ? 'block' : 'none'; // Show initially based on default
-
+videoFileButtonController.domElement.style.display = cameraSettings.source === 'Video File' ? 'block' : 'none';
 cameraSourceController.onChange(async (value) => {
-    videoFileButtonController.domElement.style.display = value === 'Video File' ? 'block' : 'none'; // Toggle button visibility
-    // Reset camera manager only if switching *away* from a source or to a *different* source type
-    if (cameraManager.isInitialized && cameraManager.sourceType !== value.toLowerCase()) {
-        cameraManager.resetSource();
-    }
-
-    // If enabling Webcam or Video File, and motion/viz is enabled, start it
+    videoFileButtonController.domElement.style.display = value === 'Video File' ? 'block' : 'none';
+    if (cameraManager.isInitialized && cameraManager.sourceType !== value.toLowerCase()) { cameraManager.resetSource(); }
     if (value === 'Webcam') {
         const success = await cameraManager.initCamera();
-        if (!success) {
-            cameraSettings.source = 'None'; // Revert on failure
-            cameraSourceController.updateDisplay();
-        } else if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) {
-            cameraManager.start(); // Start if needed
-        }
-    } else if (value === 'Video File') {
-        // Trigger file input. Loading and starting happens in the input's event listener.
-        cameraSettings.triggerVideoFileInput();
-    } else { // value === 'None'
-        // Stop and reset the camera manager if source is set to None
+        if (!success) { cameraSettings.source = 'None'; cameraSourceController.updateDisplay(); }
+        else if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) { cameraManager.start(); }
+    } else if (value === 'Video File') { cameraSettings.triggerVideoFileInput(); }
+    else { // value === 'None'
         cameraManager.resetSource();
-        // Also disable motion/visualization toggles if source is None
         if (cameraSettings.cameraMotionEnabled) {
             cameraSettings.cameraMotionEnabled = false;
             audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
@@ -227,89 +196,40 @@ cameraSourceController.onChange(async (value) => {
         }
     }
 });
-
-
 // --- Camera Interaction Controls ---
-audioCameraFolder.add(cameraSettings, 'cameraMotionEnabled').name('Enable Grid Motion')
+audioCameraFolder.add(cameraSettings, 'cameraMotionEnabled').name('Enable Motion Influence')
     .onChange(async (enabled) => {
         if (enabled) {
-            // Only try to init/start if a source is selected
             if (cameraSettings.source === 'Webcam') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'webcam') {
                     const success = await cameraManager.initCamera();
-                    if (!success) {
-                        cameraSettings.cameraMotionEnabled = false;
-                        audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
-                        return; // Exit if init failed
-                    }
-                }
-                cameraManager.start(); // Start webcam processing
+                    if (!success) { cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); }); return; }
+                } cameraManager.start();
             } else if (cameraSettings.source === 'Video File') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'video') {
-                    // Need to load a video first
-                    alert("Please load a video file first using the 'Load Video File' button.");
-                    cameraSettings.cameraMotionEnabled = false;
-                    audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
-                    return;
-                }
-                cameraManager.start(); // Start video file processing
-            } else { // Source is 'None'
-                alert("Please select a Camera Source (Webcam or Video File) first.");
-                cameraSettings.cameraMotionEnabled = false;
-                audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
-                return;
-            }
-        } else {
-            // Stop processing, but don't reset source unless visualization is also off
-            if (!cameraSettings.cameraVisualizationEnabled) {
-                cameraManager.stop(); // Stop processing only
-            }
-        }
+                    alert("Please load a video file first."); cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); }); return;
+                } cameraManager.start();
+            } else { alert("Please select a Camera Source first."); cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); }); return; }
+        } else { if (!cameraSettings.cameraVisualizationEnabled) { cameraManager.stop(); } }
     });
-
 audioCameraFolder.add(cameraSettings, 'cameraVisualizationEnabled').name('Enable Visualization')
     .onChange(async (enabled) => {
         if (enabled) {
-            // Only try to init/start if a source is selected
             if (cameraSettings.source === 'Webcam') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'webcam') {
                     const success = await cameraManager.initCamera();
-                    if (!success) {
-                        cameraSettings.cameraVisualizationEnabled = false;
-                        audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
-                        return; // Exit if init failed
-                    }
-                }
-                cameraManager.start(); // Start webcam processing (needed for visualization updates)
-                cameraVisualizer.setVisible(true);
+                    if (!success) { cameraSettings.cameraVisualizationEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); }); return; }
+                } cameraManager.start(); cameraVisualizer.setVisible(true);
             } else if (cameraSettings.source === 'Video File') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'video') {
-                    alert("Please load a video file first using the 'Load Video File' button.");
-                    cameraSettings.cameraVisualizationEnabled = false;
-                    audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
-                    return;
-                }
-                cameraManager.start(); // Start video file processing
-                cameraVisualizer.setVisible(true);
-            } else { // Source is 'None'
-                alert("Please select a Camera Source (Webcam or Video File) first.");
-                cameraSettings.cameraVisualizationEnabled = false;
-                audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
-                return;
-            }
-        } else {
-            cameraVisualizer.setVisible(false);
-            // Stop processing only if grid motion is also disabled
-            if (!cameraSettings.cameraMotionEnabled) {
-                 cameraManager.stop(); // Stop processing
-            }
-        }
+                    alert("Please load a video file first."); cameraSettings.cameraVisualizationEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); }); return;
+                } cameraManager.start(); cameraVisualizer.setVisible(true);
+            } else { alert("Please select a Camera Source first."); cameraSettings.cameraVisualizationEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); }); return; }
+        } else { cameraVisualizer.setVisible(false); if (!cameraSettings.cameraMotionEnabled) { cameraManager.stop(); } }
     });
 audioCameraFolder.add(cameraSettings, 'visualizationDepthScale', 1, 20).name('Vis Depth Scale').onChange(val => cameraVisualizer.setDepthScale(val));
 audioCameraFolder.add(cameraSettings, 'visualizationParticleSize', 0.01, 0.5).name('Vis Particle Size').onChange(val => cameraVisualizer.setParticleSize(val));
-
-audioCameraFolder.open(); // Keep open by default
-
+audioCameraFolder.open();
 
 // Post Processing Folder
 const ppFolder = gui.addFolder('Post Processing');
@@ -320,13 +240,14 @@ ppFolder.add(settings, 'bloomEnabled').name("Bloom").onChange(val => bloomPass.e
 ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength = val);
 ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
 ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
-// ppFolder.open(); // Keep closed by default
+// ppFolder.open();
 
 // Instance Management Folder
 const instanceManagement = gui.addFolder('Instance Management');
-instanceManagement.add(settings, 'cloneCurrent').name("Clone Selected / Add New");
+instanceManagement.add(settings, 'addGrid').name("Add Grid"); // Changed
+instanceManagement.add(settings, 'addPointCloud').name("Add Point Cloud"); // Added
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
-instanceManagement.open(); // Keep open
+instanceManagement.open();
 
 // --- Event Listeners ---
 const raycaster = new THREE.Raycaster();
@@ -337,31 +258,20 @@ let isDragging = false; // Used for mouse interaction logic
 document.getElementById('audioInput').addEventListener('change', async (e) => {
     if (e.target.files.length > 0) {
         const file = e.target.files[0];
-        audioSettings.lastAudioFileLoaded = file.name; // Store filename
+        audioSettings.lastAudioFileLoaded = file.name;
         try {
             await audioManager.loadAudio(file);
             audioManager.play();
-            // Ensure GUI reflects Audio File source if user selected via button
             if (audioSettings.source !== 'Audio File') {
-                 audioSettings.source = 'Audio File';
-                 audioSourceController.updateDisplay();
-                 audioFileButtonController.domElement.style.display = 'block';
+                 audioSettings.source = 'Audio File'; audioSourceController.updateDisplay(); audioFileButtonController.domElement.style.display = 'block';
             }
         } catch (error) {
             console.error("Failed to load or play audio:", error);
-            audioSettings.source = 'None'; // Revert on error
-            audioSourceController.updateDisplay();
-            audioFileButtonController.domElement.style.display = 'none';
-        } finally {
-             document.getElementById('audioInput').value = ''; // Clear input regardless of success/fail
-        }
+            audioSettings.source = 'None'; audioSourceController.updateDisplay(); audioFileButtonController.domElement.style.display = 'none';
+        } finally { document.getElementById('audioInput').value = ''; }
     } else {
-         // User cancelled file selection
          if (audioSettings.source === 'Audio File') {
-             // If source was already Audio File (e.g., clicked button again), revert to None
-             audioSettings.source = 'None';
-             audioSourceController.updateDisplay();
-             audioFileButtonController.domElement.style.display = 'none';
+             audioSettings.source = 'None'; audioSourceController.updateDisplay(); audioFileButtonController.domElement.style.display = 'none';
          }
     }
 });
@@ -370,91 +280,69 @@ document.getElementById('audioInput').addEventListener('change', async (e) => {
 document.getElementById('videoInput').addEventListener('change', async (e) => {
     if (e.target.files.length > 0) {
         const file = e.target.files[0];
-        cameraSettings.lastVideoFileLoaded = file.name; // Store filename
+        cameraSettings.lastVideoFileLoaded = file.name;
         try {
             const success = await cameraManager.loadVideo(file);
             if (success) {
-                // Ensure GUI reflects Video File source
                 if (cameraSettings.source !== 'Video File') {
-                    cameraSettings.source = 'Video File';
-                    cameraSourceController.updateDisplay();
-                    videoFileButtonController.domElement.style.display = 'block';
+                    cameraSettings.source = 'Video File'; cameraSourceController.updateDisplay(); videoFileButtonController.domElement.style.display = 'block';
                 }
-                // If motion or visualization is enabled, start the video
-                if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) {
-                    cameraManager.start();
-                }
-            } else {
-                 throw new Error("CameraManager failed to load video."); // Throw error to be caught below
-            }
+                if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) { cameraManager.start(); }
+            } else { throw new Error("CameraManager failed to load video."); }
         } catch (error) {
-            console.error("Failed to load or start video:", error);
-            alert(`Failed to load video: ${error.message}`);
-            cameraSettings.source = 'None'; // Revert on error
-            cameraSourceController.updateDisplay();
-            videoFileButtonController.domElement.style.display = 'none';
-            cameraManager.resetSource(); // Ensure cleanup
-        } finally {
-            document.getElementById('videoInput').value = ''; // Clear input
-        }
+            console.error("Failed to load or start video:", error); alert(`Failed to load video: ${error.message}`);
+            cameraSettings.source = 'None'; cameraSourceController.updateDisplay(); videoFileButtonController.domElement.style.display = 'none'; cameraManager.resetSource();
+        } finally { document.getElementById('videoInput').value = ''; }
     } else {
-         // User cancelled file selection
          if (cameraSettings.source === 'Video File') {
-             // If source was already Video File, revert to None
-             cameraSettings.source = 'None';
-             cameraSourceController.updateDisplay();
-             videoFileButtonController.domElement.style.display = 'none';
-             cameraManager.resetSource(); // Clean up if they cancel
+             cameraSettings.source = 'None'; cameraSourceController.updateDisplay(); videoFileButtonController.domElement.style.display = 'none'; cameraManager.resetSource();
          }
     }
 });
 
 
-// Mouse Interaction for Grid Selection / Modification
+// Mouse Interaction for Object Selection / Grid Modification
 window.addEventListener('mousedown', (e) => {
-    // Prevent interaction if clicking on GUI
-    if (e.target.closest('.dg')) return;
+    if (e.target.closest('.dg')) return; // Prevent interaction if clicking on GUI
 
-    isDragging = true; // Assume dragging starts on mousedown
+    isDragging = true; // Assume dragging starts
 
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
-    // Intersect grids, but ignore camera visualizer points
-    const intersectableObjects = gridManager.instances;
+    const intersectableObjects = objectManager.instances; // Use objectManager
     const intersects = raycaster.intersectObjects(intersectableObjects);
-
 
     if (intersects.length > 0) {
         // Don't select if transform controls are being dragged
-        if (!gridManager.transformControls || !gridManager.transformControls.dragging) {
-             gridManager.selectInstance(intersects[0].object);
+        if (!objectManager.transformControls || !objectManager.transformControls.dragging) {
+             objectManager.selectInstance(intersects[0].object); // Use objectManager
         }
     }
-    // Note: Dragging state for orbit controls is handled by transform controls listener
+    // Dragging state for orbit controls is handled by transform controls listener
 });
 
 window.addEventListener('mousemove', (e) => {
-    // If dragging is initiated by transform controls, let it handle orbit control disabling
-    if (gridManager.transformControls?.dragging) {
-        isDragging = true; // Ensure our flag matches
+    if (objectManager.transformControls?.dragging) { // Use objectManager
+        isDragging = true;
         return;
     }
-    // If dragging wasn't initiated by transform controls (i.e., general scene drag)
     if (isDragging && orbitControls.enabled) {
-         // Standard orbit controls drag - no grid modification
-    } else if (!isDragging && gridManager.currentInstance) {
-        // Hover effect when not dragging - modify grid (poke)
-        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+         // Standard orbit controls drag
+    } else if (!isDragging && objectManager.currentInstance) { // Use objectManager
+        // Hover effect - only poke grids
+        if (objectManager.currentInstance.userData.settings.type === 'grid') {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
-        raycaster.setFromCamera(mouse, camera);
-        const intersects = raycaster.intersectObject(gridManager.currentInstance);
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(objectManager.currentInstance); // Use objectManager
 
-        if (intersects.length > 0) {
-            const localPoint = gridManager.currentInstance.worldToLocal(intersects[0].point.clone());
-            modifyGrid(gridManager.currentInstance, localPoint);
+            if (intersects.length > 0) {
+                const localPoint = objectManager.currentInstance.worldToLocal(intersects[0].point.clone());
+                pokeGrid(objectManager.currentInstance, localPoint); // Call pokeGrid
+            }
         }
     }
 });
@@ -475,10 +363,14 @@ window.addEventListener('resize', () => {
 
 // --- Core Logic Functions ---
 
-function modifyGrid(grid, point) {
+// Renamed from modifyGrid, only affects grids
+function pokeGrid(grid, point) {
+    // Ensure it's actually a grid before proceeding
+    if (!grid || grid.userData.settings.type !== 'grid') return;
+
     const vertices = grid.geometry.attributes.position.array;
     const targetHeights = grid.userData.targetHeights;
-    const settings = grid.userData.settings; // Get instance-specific settings
+    const settings = grid.userData.settings;
     const size = grid.geometry.parameters.width;
     const segments = grid.geometry.parameters.widthSegments;
     const verticesPerSide = segments + 1;
@@ -486,237 +378,76 @@ function modifyGrid(grid, point) {
 
     const modificationRadius = settings.pokeRadius;
     const pokeStrength = settings.pokeStrength;
-    const maxPokeHeight = settings.heightScale * 1.5; // Limit poke height relative to scale
+    const maxPokeHeight = settings.heightScale * 1.5;
 
     for (let i = 0; i < targetHeights.length; i++) {
-        // Calculate vertex position in local grid space (plane is in XY initially)
         const x = (i % verticesPerSide) * (size / segments) - halfSize;
-        const y = Math.floor(i / verticesPerSide) * (size / segments) - halfSize; // Corresponds to Z in world after rotation
+        const y = Math.floor(i / verticesPerSide) * (size / segments) - halfSize;
 
-        // Use the point's x and y (since grid is rotated to be flat on XZ plane)
         const dx = x - point.x;
-        const dy = y - point.y; // Compare with point.y which corresponds to local Z
+        const dy = y - point.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
-
 
         if (distance < modificationRadius) {
             const falloff = 1 - (distance / modificationRadius);
             const strength = falloff * pokeStrength;
-            // Increase target height, but clamp to maxPokeHeight
             targetHeights[i] = Math.min(targetHeights[i] + strength, maxPokeHeight);
         }
     }
-    // No need to set needsUpdate here, updateGrid does it every frame
+    // updateObject handles needsUpdate flags
 }
 
-function updateGrid(grid, motionScore) {
-    const settings = grid.userData.settings;
-    if (!settings.visible) return; // Skip update if not visible
-
-    const frequencyData = audioManager.getFrequencyRangeData(settings.frequencyRange);
-    const vertices = grid.geometry.attributes.position.array;
-    const colors = grid.geometry.attributes.color.array;
-    const targetHeights = grid.userData.targetHeights;
-
-    const size = grid.geometry.parameters.width;
-    const segments = grid.geometry.parameters.widthSegments;
-    const verticesPerSide = segments + 1;
-    const halfSize = size / 2;
-    const maxDistance = Math.sqrt(halfSize * halfSize + halfSize * halfSize);
-
-    // --- Calculate effective parameters based on motion ---
-    let effectiveHeightScale = settings.heightScale;
-    let effectiveDecayRate = settings.decayRate;
-
-    // Use cameraSettings.cameraMotionEnabled to check if motion influence is active
-    // Also check if cameraManager is actually running (has a valid source and is processing)
-    if (cameraSettings.cameraMotionEnabled && cameraManager.isRunning && settings.motionInfluenceFactor > 0) {
-        const influence = motionScore * settings.motionInfluenceFactor;
-        // Motion increases height scale
-        effectiveHeightScale = settings.heightScale * (1 + influence);
-        // Motion makes decay *slower* (closer to 1.0)
-        effectiveDecayRate = settings.decayRate + (1.0 - settings.decayRate) * influence * 0.5; // Subtle effect
-        effectiveDecayRate = Math.min(effectiveDecayRate, 0.999); // Clamp
-    }
-
-    // --- Get full frequency data for frequencyBands color mode ---
-    let lowAmp = 0, midAmp = 0, highAmp = 0;
-     if (settings.colorMapping === 'frequencyBands') {
-         lowAmp = audioManager.getAverageAmplitude('low') / 255; // Normalize
-         midAmp = audioManager.getAverageAmplitude('mid') / 255;
-         highAmp = audioManager.getAverageAmplitude('high') / 255;
-     }
-
-    // --- Time for sine wave pattern ---
-    const time = performance.now() * 0.002; // Simple time factor
-
-    for (let i = 0; i < targetHeights.length; i++) {
-        // Calculate vertex position in local grid space (plane is in XY initially)
-        const x = (i % verticesPerSide) * (size / segments) - halfSize;
-        const y = Math.floor(i / verticesPerSide) * (size / segments) - halfSize; // Corresponds to Z in world after rotation
-
-        let audioValue = 0;
-        let patternHeight = 0; // Height contribution from non-audio patterns
-
-        // Only use audio data if an audio source is active
-        if (frequencyData.length > 0 && audioSettings.source !== 'None') {
-            switch (settings.wavePattern) {
-                case 'radial':
-                    const distance = Math.sqrt(x * x + y * y);
-                    const normalizedDistance = Math.min(distance / maxDistance, 1.0);
-                    const index = Math.floor(normalizedDistance * (frequencyData.length - 1));
-                    audioValue = frequencyData[index] || 0;
-                    break;
-                case 'linear':
-                    audioValue = frequencyData[i % frequencyData.length] || 0;
-                    break;
-                case 'random':
-                    audioValue = frequencyData[Math.floor(Math.random() * frequencyData.length)] || 0;
-                    break;
-                case 'sineWave':
-                    const distFromCenter = Math.sqrt(x * x + y * y);
-                    // Wave propagates outwards, influenced by average mid-frequency amplitude
-                    const avgMidAmp = audioManager.getAverageAmplitude('mid') / 255; // Normalized 0-1
-                    patternHeight = Math.sin(distFromCenter * (1 + avgMidAmp * 2) - time * (1 + avgMidAmp * 5)) * (0.5 + avgMidAmp);
-                    // Use overall average amplitude for audioValue in this mode
-                    audioValue = audioManager.getAverageAmplitude(settings.frequencyRange);
-                    break;
-                case 'checkerboard':
-                    // Determine if the vertex is on a 'black' or 'white' square
-                    const scale = 4.0; // Adjust size of checkers
-                    const checkX = Math.floor((x + halfSize) / scale);
-                    const checkY = Math.floor((y + halfSize) / scale);
-                    if ((checkX + checkY) % 2 === 0) {
-                        // Use low frequency for 'black' squares
-                        audioValue = audioManager.getAverageAmplitude('low');
-                    } else {
-                        // Use high frequency for 'white' squares
-                        audioValue = audioManager.getAverageAmplitude('high');
-                    }
-                    break;
-                default:
-                     audioValue = frequencyData[i % frequencyData.length] || 0; // Fallback
-            }
-        }
-
-        // Calculate height based on audio and apply influence/scale
-        const audioHeight = (audioValue / 255) * effectiveHeightScale * settings.audioInfluence;
-
-        // Add pattern height (only non-zero for sineWave currently)
-        const totalPatternHeight = audioHeight + (patternHeight * effectiveHeightScale * settings.audioInfluence);
-
-        // Apply decay to target height (from mouse interaction)
-        targetHeights[i] *= effectiveDecayRate;
-        if (targetHeights[i] < 0.01) targetHeights[i] = 0; // Floor small values
-
-        // Final vertex height is the max of decayed target height and current pattern height
-        const finalHeight = Math.max(targetHeights[i], totalPatternHeight);
-        vertices[i * 3 + 2] = finalHeight; // Set the Z coordinate (which acts as height)
-
-        // --- Color Calculation ---
-        let colorFactor = 0;
-        const normalizedHeight = finalHeight / effectiveHeightScale; // Normalize height relative to scale
-        const normalizedAudio = audioValue / 255;
-        const tempColor = new THREE.Color(); // Reuse color object
-
-        switch (settings.colorMapping) {
-            case 'height':
-                colorFactor = THREE.MathUtils.clamp(normalizedHeight, 0, 1);
-                break;
-            case 'audio':
-                colorFactor = THREE.MathUtils.clamp(normalizedAudio, 0, 1);
-                break;
-            case 'combined':
-                colorFactor = THREE.MathUtils.clamp((normalizedHeight + normalizedAudio) / 2, 0, 1);
-                break;
-             case 'frequencyBands':
-                 // Mix colors based on normalized low/mid/high amplitudes
-                 tempColor.setRGB(0,0,0); // Start black
-                 // Only apply colors if an audio source is active
-                 if (audioSettings.source !== 'None') {
-                     tempColor.lerp(settings.lowColor, lowAmp);
-                     tempColor.lerp(settings.midColor, midAmp); // Lerp towards mid based on midAmp
-                     tempColor.lerp(settings.highColor, highAmp); // Lerp towards high based on highAmp
-                 } else {
-                     // Default to midColor if no audio? Or maybe lowColor?
-                     tempColor.copy(settings.midColor);
-                 }
-                 break; // Skip standard lerp below
-        }
-
-        // Interpolate color based on the factor (unless handled by frequencyBands)
-        if (settings.colorMapping !== 'frequencyBands') {
-            if (colorFactor < 0.5) {
-                tempColor.lerpColors(settings.lowColor, settings.midColor, colorFactor * 2);
-            } else {
-                tempColor.lerpColors(settings.midColor, settings.highColor, (colorFactor - 0.5) * 2);
-            }
-        }
-
-        colors[i * 3] = tempColor.r;
-        colors[i * 3 + 1] = tempColor.g;
-        colors[i * 3 + 2] = tempColor.b;
-    }
-
-    grid.geometry.attributes.position.needsUpdate = true;
-    grid.geometry.attributes.color.needsUpdate = true;
-    grid.geometry.computeVertexNormals(); // Important for lighting on dynamic geometry
-}
-
+// updateGrid function is now part of ObjectManager (updateObject)
 
 // --- Animation Loop ---
 let lastTimestamp = 0;
 function animate(timestamp) {
     requestAnimationFrame(animate);
 
-    const deltaTime = (timestamp - lastTimestamp) * 0.001; // Delta time in seconds
+    const deltaTime = (timestamp - lastTimestamp) * 0.001 || 0; // Delta time in seconds, handle first frame
     lastTimestamp = timestamp;
 
-    // --- Get Motion Score (only if enabled and camera is running) ---
+    // --- Get Motion Score ---
     let motionScore = 0;
-    if (cameraSettings.cameraMotionEnabled && cameraManager.isRunning) {
-        motionScore = cameraManager.getMotionScore(); // Processes frame internally
+    // Process frame if either motion influence or visualization is enabled AND camera is running
+    if ((cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) && cameraManager.isRunning) {
+        // processFrame updates the score internally and prepares data for visualizer
+        cameraManager.processFrame();
+        motionScore = cameraManager.lastMotionScore; // Get the updated score
     }
 
-    // --- Update Camera Visualization (if enabled and camera is running) ---
+    // --- Update Camera Visualization ---
     if (cameraSettings.cameraVisualizationEnabled && cameraManager.isRunning) {
-        // CameraManager.getMotionScore() already processes the frame if motion is enabled.
-        // If only visualization is enabled, we might need an explicit process call.
-        // Let's ensure processFrame is called if visualization is on but motion is off.
-        if (!cameraSettings.cameraMotionEnabled) {
-            cameraManager.processFrame(); // Process frame specifically for visualization
-        }
-        cameraVisualizer.update(); // Update particle positions/colors
+        cameraVisualizer.update(); // Update particle positions/colors using the frame processed above
     } else if (!cameraSettings.cameraVisualizationEnabled && cameraVisualizer.points && cameraVisualizer.points.visible) {
-        // Ensure visualizer is hidden if disabled
-        cameraVisualizer.setVisible(false);
+        cameraVisualizer.setVisible(false); // Ensure hidden if disabled
     }
 
 
-    // --- Global Effects (like Camera FOV based on overall audio) ---
-    if (audioSettings.source !== 'None') {
-        const averageAmplitude = audioManager.getAverageAmplitude('mid'); // Use mid range for FOV effect
-        const minFOV = 70; // Adjusted range
+    // --- Global Effects (Camera FOV) ---
+    if (audioSettings.source !== 'None' && audioManager.audioContext) { // Check audio context exists
+        const averageAmplitude = audioManager.getAverageAmplitude('mid');
+        const minFOV = 70;
         const maxFOV = 80;
-        const amplitudeFactor = THREE.MathUtils.clamp(averageAmplitude / 128, 0, 1); // Normalize (0-255 -> 0-1, using 128 as midpoint)
-        // Smooth FOV change using deltaTime
+        const amplitudeFactor = THREE.MathUtils.clamp(averageAmplitude / 128, 0, 1);
         const targetFOV = THREE.MathUtils.lerp(minFOV, maxFOV, amplitudeFactor);
-        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFOV, Math.min(deltaTime * 5.0, 1.0)); // Adjust lerp speed (5.0)
+        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFOV, Math.min(deltaTime * 5.0, 1.0));
         camera.updateProjectionMatrix();
     }
 
 
-    // --- Update each grid instance ---
-    gridManager.instances.forEach(grid => {
-        updateGrid(grid, motionScore); // Pass motion score
+    // --- Update each managed object ---
+    objectManager.instances.forEach(instance => {
+        objectManager.updateObject(instance, audioManager, motionScore, cameraSettings); // Call the manager's update method
     });
 
-    orbitControls.update(); // Update orbit controls (handles damping, auto-rotate)
+    orbitControls.update(); // Update orbit controls
 
     composer.render(); // Render scene with post-processing
 }
 
 // --- Initialization ---
-gridManager.addInstance(); // Add the initial grid
-gridManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Setup controls *after* first instance exists
+objectManager.addInstance('grid'); // Add the initial grid
+// objectManager.addInstance('pointcloud'); // Optionally add a point cloud initially
+objectManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Setup controls *after* first instance exists
 animate(0); // Start the animation loop
