@@ -456,7 +456,7 @@ export class ObjectManager {
             if (this.transformControls) {
                 console.log(`Attaching transform controls to ${instance.uuid}`); // Debug log
                 this.transformControls.attach(instance);
-                // No need to manually set visibility, attach handles it
+                // Attach should make the helper visible automatically
             } else {
                  console.warn("Transform controls not available for attachment."); // Debug log
             }
@@ -490,15 +490,17 @@ export class ObjectManager {
         });
 
         // Add the transform controls OBJECT to the scene for interaction
-        this.scene.add(this.transformControls); // <<< CORRECTED LINE
-        console.log("Transform controls object added to scene."); // Debug log
+        this.scene.add(this.transformControls);
+        // ALSO add the helper explicitly to ensure visibility based on user feedback
+        this.scene.add(this.transformControls.getHelper()); // <<< ADDED LINE
+        console.log("Transform controls object AND helper added to scene."); // Debug log
 
         // Select the first instance if available after setup
         if (this.instances.length > 0) {
             this.selectInstance(this.instances[0]);
         } else {
             // Ensure controls are hidden if no initial instance exists
-            this.transformControls.detach();
+            this.transformControls.detach(); // Detach should hide helper
         }
     }
 
@@ -747,9 +749,11 @@ export class ObjectManager {
     dispose() {
         console.log("Disposing ObjectManager...");
         if (this.transformControls) {
+            // Remove helper first if it was added separately
+            this.scene.remove(this.transformControls.getHelper()); // <<< ADDED LINE
             this.transformControls.dispose();
             // Remove the main control object from the scene
-            this.scene.remove(this.transformControls); // <<< CORRECTED LINE
+            this.scene.remove(this.transformControls);
         }
         // Use deleteCurrent repeatedly to ensure proper cleanup
         while (this.instances.length > 0) {
