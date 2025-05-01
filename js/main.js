@@ -307,7 +307,6 @@ window.addEventListener('mousedown', (e) => {
     if (e.target.closest('.dg')) return;
 
     // Ignore clicks if TransformControls is currently being dragged
-    // Check if transformControls exists before accessing dragging property
     if (objectManager.transformControls?.dragging) return;
 
     // Update mouse coordinates
@@ -315,15 +314,19 @@ window.addEventListener('mousedown', (e) => {
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
-    const intersectableObjects = objectManager.instances; // Use objectManager
-    const intersects = raycaster.intersectObjects(intersectableObjects, false); // Don't intersect recursively
+    const intersectableObjects = objectManager.instances;
+    const intersects = raycaster.intersectObjects(intersectableObjects, false);
 
     if (intersects.length > 0) {
         // Clicked on a managed object
         const clickedObject = intersects[0].object;
 
-        // Select the object (this will also attach the transform controls)
-        objectManager.selectInstance(clickedObject);
+        // Only select if it's not already the current instance
+        // If it *is* the current instance, let TransformControls handle the click (potential drag start)
+        if (objectManager.currentInstance !== clickedObject) {
+            objectManager.selectInstance(clickedObject);
+        }
+        // If clickedObject IS the currentInstance, do nothing here.
 
     } else {
         // Clicked on empty space (and not dragging the controls)
