@@ -252,7 +252,7 @@ instanceManagement.open();
 // --- Event Listeners ---
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
-let isDraggingObject = false; // Flag specifically for dragging the transform controls gizmo
+// let isDraggingObject = false; // Flag no longer needed
 
 // Hidden Audio File Input Listener
 document.getElementById('audioInput').addEventListener('change', async (e) => {
@@ -301,12 +301,13 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 });
 
 
-// Mouse Interaction for Object Selection
+// Mouse Interaction for Object Selection / Deselection
 window.addEventListener('mousedown', (e) => {
     // Ignore clicks on the GUI
     if (e.target.closest('.dg')) return;
 
     // Ignore clicks if TransformControls is currently being dragged
+    // Check if transformControls exists before accessing dragging property
     if (objectManager.transformControls?.dragging) return;
 
     // Update mouse coordinates
@@ -315,44 +316,29 @@ window.addEventListener('mousedown', (e) => {
 
     raycaster.setFromCamera(mouse, camera);
     const intersectableObjects = objectManager.instances; // Use objectManager
-    const intersects = raycaster.intersectObjects(intersectableObjects);
+    const intersects = raycaster.intersectObjects(intersectableObjects, false); // Don't intersect recursively
 
     if (intersects.length > 0) {
+        // Clicked on a managed object
         const clickedObject = intersects[0].object;
-        const currentSelected = objectManager.currentInstance;
 
-        // Only select the object if it's NOT the currently selected one.
-        // This prevents interfering with TransformControls when clicking the selected object (potentially aiming for the gizmo).
-        if (clickedObject !== currentSelected) {
-             objectManager.selectInstance(clickedObject); // Use objectManager
-        }
-        // If clickedObject === currentSelected, do nothing here.
-        // Let TransformControls handle the event if the click was on the gizmo.
+        // Select the object (this will also attach the transform controls)
+        objectManager.selectInstance(clickedObject);
+
+    } else {
+        // Clicked on empty space (and not dragging the controls)
+        // Deselect the current object and detach controls
+        objectManager.deselectInstance();
     }
-    // If the click doesn't hit any managed object, we don't deselect here.
-    // Deselection could be added (e.g., click empty space to deselect).
 });
 
 window.addEventListener('mousemove', (e) => {
-    // Update the dragging flag based on transform controls state
-    // This flag isn't strictly needed anymore but doesn't hurt
-    isDraggingObject = objectManager.transformControls?.dragging ?? false;
-
-    if (isDraggingObject) {
-        // If dragging the object with transform controls, do nothing else here.
-        // OrbitControls are disabled via the 'dragging-changed' listener.
-        return;
-    }
-
-    // Removed the grid poking logic here
-
-    // Note: Standard orbit controls dragging happens automatically if orbitControls.enabled is true
-    // and the mouse event is not intercepted by the transform controls or the GUI.
+    // No logic needed here for selection/poking anymore
+    // OrbitControls handles movement when not dragging transform controls
 });
 
 window.addEventListener('mouseup', () => {
-    // Reset the dragging flag if needed (though 'dragging-changed' is more reliable)
-    // isDraggingObject = false;
+    // No specific logic needed here for selection anymore
 });
 
 

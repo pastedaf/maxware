@@ -397,7 +397,6 @@ export class ObjectManager {
             // Detach transform controls first
             if (this.transformControls && this.transformControls.object === instanceToDelete) {
                 this.transformControls.detach();
-                // Visibility is handled automatically by detach/attach
             }
 
             // Remove GUI folder and its controllers
@@ -433,11 +432,13 @@ export class ObjectManager {
             this.currentInstance = this.instances.length > 0 ? this.instances[Math.max(0, index - 1)] : null;
             if (this.currentInstance && this.transformControls) {
                 this.transformControls.attach(this.currentInstance);
-                // No need to manually set visibility, attach handles it
+                // Open the GUI folder for the newly selected instance
+                if (this.currentInstance.userData.guiFolder) {
+                    this.currentInstance.userData.guiFolder.open();
+                }
             } else if (this.transformControls && !this.currentInstance) {
-                 // If no instance is selected, detach should have hidden it.
-                 // If detach wasn't called (e.g., deleting last item), explicitly hide.
-                 this.transformControls.detach(); // Ensure it's detached and hidden
+                 // If no instance is selected, ensure controls are detached
+                 this.transformControls.detach();
             }
 
             console.log(`Instance ${instanceToDelete.uuid} (${instanceToDelete.userData.settings.type}) deleted.`);
@@ -447,7 +448,6 @@ export class ObjectManager {
 
     selectInstance(instance) {
         if (this.instances.includes(instance)) {
-            // console.log(`[ObjectManager] Selecting instance: ${instance.uuid} (${instance.userData.settings.type})`); // Debug log
             // Close previously selected instance's GUI folder
             if (this.currentInstance && this.currentInstance !== instance && this.currentInstance.userData.guiFolder) {
                  this.currentInstance.userData.guiFolder.close();
@@ -455,12 +455,10 @@ export class ObjectManager {
 
             this.currentInstance = instance;
             if (this.transformControls) {
-                // console.log(`[ObjectManager] Attaching transform controls to ${instance.uuid}`); // Debug log
+                // Attach controls to the new instance
                 this.transformControls.attach(instance);
-                // console.log(`[ObjectManager] Transform controls visible after attach: ${this.transformControls.visible}`); // ADDED LOG
-                // Attach should make the controls visible automatically
             } else {
-                 console.warn("[ObjectManager] Transform controls not available for attachment."); // Debug log
+                 console.warn("[ObjectManager] Transform controls not available for attachment.");
             }
             // Open the newly selected instance's GUI folder
             if (this.currentInstance.userData.guiFolder) {
@@ -472,11 +470,25 @@ export class ObjectManager {
         }
     }
 
+    // New method to deselect the current instance
+    deselectInstance() {
+        if (this.currentInstance) {
+            // Close the GUI folder
+            if (this.currentInstance.userData.guiFolder) {
+                this.currentInstance.userData.guiFolder.close();
+            }
+            // Detach transform controls
+            if (this.transformControls) {
+                this.transformControls.detach();
+            }
+            // console.log(`[ObjectManager] Deselected instance: ${this.currentInstance.uuid}`);
+            this.currentInstance = null;
+        }
+    }
+
     setupTransformControls(camera, renderer, orbitControls) {
         this.orbitControls = orbitControls; // Store reference
         this.transformControls = new TransformControls(camera, renderer.domElement);
-        // this.transformControls.enabled = true; // Not needed, enabled by default
-        // Visibility is handled by attach/detach, start detached (invisible)
 
         this.transformControls.addEventListener('dragging-changed', event => {
             if (this.orbitControls) {
@@ -497,9 +509,9 @@ export class ObjectManager {
         this.scene.add(this.transformControls);
         console.log("[ObjectManager] Transform controls object added to scene.");
 
-        // Explicitly add the helper object to the scene as requested
-        this.scene.add(this.transformControls.getHelper());
-        console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
+        // REMOVED: Explicit addition of helper is usually not needed
+        // this.scene.add(this.transformControls.getHelper());
+        // console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
 
 
         // Select the first instance if available after setup
@@ -762,18 +774,15 @@ export class ObjectManager {
     dispose() {
         console.log("Disposing ObjectManager...");
         if (this.transformControls) {
-            // Remove helper first if it was added separately
-            const helper = this.transformControls.getHelper();
-            if (helper && helper.parent) {
-                 this.scene.remove(helper);
-                 console.log("[ObjectManager] Transform controls helper removed from scene.");
-            }
-            this.transformControls.dispose();
+            // Detach from any object first
+            this.transformControls.detach();
             // Remove the main control object from the scene
             if (this.transformControls.parent) { // Check if main control object is in scene
                 this.scene.remove(this.transformControls);
                 console.log("[ObjectManager] Transform controls object removed from scene.");
             }
+            // Dispose of the controls
+            this.transformControls.dispose();
         }
         // Use deleteCurrent repeatedly to ensure proper cleanup
         while (this.instances.length > 0) {
