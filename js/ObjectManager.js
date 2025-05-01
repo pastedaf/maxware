@@ -509,9 +509,9 @@ export class ObjectManager {
         this.scene.add(this.transformControls);
         console.log("[ObjectManager] Transform controls object added to scene.");
 
-        // REMOVED: Explicit addition of helper is usually not needed
-        // this.scene.add(this.transformControls.getHelper());
-        // console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
+        // ADDED: Explicitly add the helper as well, like in the example script
+        this.scene.add(this.transformControls.getHelper());
+        console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
 
 
         // Select the first instance if available after setup
@@ -776,6 +776,14 @@ export class ObjectManager {
         if (this.transformControls) {
             // Detach from any object first
             this.transformControls.detach();
+
+            // Remove the helper object from the scene
+            const helper = this.transformControls.getHelper();
+            if (helper && helper.parent) {
+                this.scene.remove(helper);
+                console.log("[ObjectManager] Transform controls helper removed from scene.");
+            }
+
             // Remove the main control object from the scene
             if (this.transformControls.parent) { // Check if main control object is in scene
                 this.scene.remove(this.transformControls);
