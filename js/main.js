@@ -307,35 +307,26 @@ window.addEventListener('mousedown', (e) => {
     // 1. Ignore clicks on the GUI
     if (e.target.closest('.dg')) return;
 
-    // 2. Check if TransformControls gizmo is hovered. If so, let it handle the event.
-    const controls = objectManager.transformControls;
-    if (controls?.hovered) {
-        // console.log("Mousedown on hovered gizmo - letting TransformControls handle.");
-        return;
-    }
-
-    // 3. Record the starting position for click detection in mouseup
+    // 2. Record the starting position for click detection in mouseup
     onDownPosition.x = e.clientX;
     onDownPosition.y = e.clientY;
 
-    // 4. DO NOT raycast or select/deselect here.
+    // 3. DO NOT check for gizmo hover or raycast here. Let the event propagate.
+    //    TransformControls will handle its own mousedown on the gizmo.
 });
 
 window.addEventListener('mousemove', (e) => {
     // No selection/deselection logic needed here.
-    // OrbitControls handles camera drag.
-    // TransformControls handles gizmo drag internally.
 });
 
 window.addEventListener('mouseup', (e) => {
     // 1. Ignore clicks on the GUI
     if (e.target.closest('.dg')) return;
 
-    // 2. Check if TransformControls was dragging. If so, it handled the interaction.
+    // 2. Check if TransformControls is currently dragging. If so, it handled the interaction.
     const controls = objectManager.transformControls;
     if (controls?.dragging) {
-        // console.log("Mouseup after dragging gizmo - interaction handled.");
-        // OrbitControls are re-enabled by the 'dragging-changed' listener in ObjectManager
+        // Drag just ended. OrbitControls are re-enabled by the 'dragging-changed' listener.
         return;
     }
 
@@ -344,21 +335,11 @@ window.addEventListener('mouseup', (e) => {
     onUpPosition.y = e.clientY;
 
     if (onDownPosition.distanceTo(onUpPosition) > 2) { // Click vs drag threshold
-        // console.log("Mouseup was a drag (OrbitControls?) - no selection change.");
-        return; // Considered a drag, not a click for selection purposes
-    }
-
-    // 4. It was a CLICK. Check if the click was on the gizmo itself.
-    //    We need to check controls.hovered *again* here because the state might have
-    //    changed between mousedown and mouseup if the mouse moved slightly over/off the gizmo.
-    if (controls?.hovered) {
-        // console.log("Mouseup click on hovered gizmo - letting TransformControls handle.");
-        // Although not dragging, the click landed on the gizmo, let TC handle potential mode changes etc.
+        // Considered a drag (likely OrbitControls), not a click for selection.
         return;
     }
 
-    // 5. It was a CLICK, and it was NOT on the gizmo. Perform selection/deselection raycast.
-    // console.log("Mouseup was a click off gizmo - performing raycast.");
+    // 4. It was a CLICK. Perform selection/deselection raycast.
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
@@ -369,18 +350,18 @@ window.addEventListener('mouseup', (e) => {
     if (intersects.length > 0) {
         // Clicked on a managed object
         const clickedObject = intersects[0].object;
-        // console.log("Raycast hit object:", clickedObject.uuid);
-        // Select the object (this handles attaching controls)
-        // Check if it's already selected to avoid unnecessary work
+        // Select the object (ObjectManager handles attaching controls)
+        // Check if it's already selected to potentially avoid redundant actions, though selectInstance should handle this.
         if (objectManager.currentInstance !== clickedObject) {
              objectManager.selectInstance(clickedObject);
-        } else {
-            // console.log("Clicked on already selected object - no change.");
         }
     } else {
-        // Clicked on empty space
-        // console.log("Raycast hit nothing - deselecting.");
-        objectManager.deselectInstance();
+        // Clicked on empty space - Deselect
+        // Check if the click might have been on the gizmo even if not dragging
+        // (e.g., clicking to change mode). If hovered, don't deselect.
+        if (!controls?.hovered) {
+             objectManager.deselectInstance();
+        }
     }
 });
 
