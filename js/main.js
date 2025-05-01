@@ -252,7 +252,8 @@ instanceManagement.open();
 // --- Event Listeners ---
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
-// let isDraggingObject = false; // Flag no longer needed
+const onDownPosition = new THREE.Vector2(); // For click detection
+const onUpPosition = new THREE.Vector2();   // For click detection
 
 // Hidden Audio File Input Listener
 document.getElementById('audioInput').addEventListener('change', async (e) => {
@@ -309,12 +310,44 @@ window.addEventListener('mousedown', (e) => {
     // 2. Check if the TransformControls gizmo is hovered or being dragged.
     //    If so, let TransformControls handle the event exclusively.
     const controls = objectManager.transformControls;
-    // Use optional chaining ?. in case controls are not yet initialized
     if (controls?.hovered || controls?.dragging) {
         return; // Let TransformControls handle this click/drag start
     }
 
-    // 3. If not interacting with the gizmo, proceed with object selection/deselection
+    // 3. Record the starting position for click detection in mouseup
+    onDownPosition.x = e.clientX;
+    onDownPosition.y = e.clientY;
+
+    // 4. DO NOT raycast or select/deselect here. Let mouseup handle clicks.
+});
+
+window.addEventListener('mousemove', (e) => {
+    // No custom logic needed here.
+    // OrbitControls handles camera movement when not dragging transform controls.
+    // TransformControls handles gizmo dragging internally.
+});
+
+window.addEventListener('mouseup', (e) => {
+    // 1. Ignore clicks on the GUI
+    if (e.target.closest('.dg')) return;
+
+    // 2. Check if TransformControls was dragging. If so, it handled the interaction.
+    const controls = objectManager.transformControls;
+    if (controls?.dragging) {
+        // Drag just ended. OrbitControls will be re-enabled by the 'dragging-changed' listener.
+        return;
+    }
+
+    // 3. Record the up position and check if it was a click (minimal movement)
+    onUpPosition.x = e.clientX;
+    onUpPosition.y = e.clientY;
+
+    if (onDownPosition.distanceTo(onUpPosition) > 1) { // Allow tiny drag tolerance
+        // It was likely an OrbitControls drag, not a click. Do nothing for selection.
+        return;
+    }
+
+    // 4. It was a CLICK. Perform selection/deselection logic.
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
@@ -323,28 +356,14 @@ window.addEventListener('mousedown', (e) => {
     const intersects = raycaster.intersectObjects(intersectableObjects, false);
 
     if (intersects.length > 0) {
-        // Clicked on a managed object (and not the gizmo)
+        // Clicked on a managed object
         const clickedObject = intersects[0].object;
-
-        // Only select if it's not already the current instance
-        if (objectManager.currentInstance !== clickedObject) {
-            objectManager.selectInstance(clickedObject);
-        }
-        // If clickedObject IS the currentInstance, do nothing here.
-
+        // Select the object (this handles attaching controls)
+        objectManager.selectInstance(clickedObject);
     } else {
-        // Clicked on empty space (and not the gizmo)
+        // Clicked on empty space
         objectManager.deselectInstance();
     }
-});
-
-window.addEventListener('mousemove', (e) => {
-    // No logic needed here for selection/poking anymore
-    // OrbitControls handles movement when not dragging transform controls
-});
-
-window.addEventListener('mouseup', () => {
-    // No specific logic needed here for selection anymore
 });
 
 
