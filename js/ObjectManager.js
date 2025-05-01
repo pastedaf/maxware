@@ -18,7 +18,9 @@ const defaultSettings = {
         midColor: new THREE.Color(0x00ff00),
         highColor: new THREE.Color(0xffffff),
         position: new THREE.Vector3(),
-        rotation: new THREE.Euler()
+        rotation: new THREE.Euler(),
+        autoRotate: false, // Added
+        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added (radians per second)
         // Note: Grid size/segments are constructor params, not instance settings
     },
     pointcloud: {
@@ -38,7 +40,9 @@ const defaultSettings = {
         midColor: new THREE.Color(0x00ffff), // Cyan
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
-        rotation: new THREE.Euler()
+        rotation: new THREE.Euler(),
+        autoRotate: false, // Added
+        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
     },
     sphere: {
         type: 'sphere',
@@ -56,7 +60,9 @@ const defaultSettings = {
         midColor: new THREE.Color(0xffff00), // Yellow
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
-        rotation: new THREE.Euler()
+        rotation: new THREE.Euler(),
+        autoRotate: false, // Added
+        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
     },
     torus: {
         type: 'torus',
@@ -75,18 +81,20 @@ const defaultSettings = {
         midColor: new THREE.Color(0xff00ff), // Magenta
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
-        rotation: new THREE.Euler()
+        rotation: new THREE.Euler(),
+        autoRotate: false, // Added
+        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
     },
-    torusknot: { // Added Torus Knot defaults
+    torusknot: {
         type: 'torusknot',
         radius: 4,
         tube: 1,
-        tubularSegments: 64, // Higher detail often needed
+        tubularSegments: 64,
         radialSegments: 8,
-        p: 2, // Knot parameter p
-        q: 3, // Knot parameter q
+        p: 2,
+        q: 3,
         audioInfluence: 1.0,
-        displacementScale: 0.5, // Knots can get complex, start smaller
+        displacementScale: 0.5,
         colorMapping: 'audio', // 'audio', 'frequencyBands', 'normal'
         frequencyRange: 'mid', // 'low', 'mid', 'high'
         visible: true,
@@ -96,7 +104,9 @@ const defaultSettings = {
         midColor: new THREE.Color(0xffaa00), // Orange-Red
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
-        rotation: new THREE.Euler()
+        rotation: new THREE.Euler(),
+        autoRotate: false, // Added
+        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
     }
 };
 
@@ -119,7 +129,7 @@ export class ObjectManager {
             pointcloud: this.createPointCloudTemplate(),
             sphere: this.createSphereTemplate(),
             torus: this.createTorusTemplate(),
-            torusknot: this.createTorusKnotTemplate() // Added Torus Knot template
+            torusknot: this.createTorusKnotTemplate()
         };
         this.instanceCount = 0;
 
@@ -254,7 +264,7 @@ export class ObjectManager {
         };
     }
 
-    createTorusKnotTemplate() { // Added
+    createTorusKnotTemplate() {
         const settings = defaultSettings.torusknot;
         const geometry = new THREE.TorusKnotGeometry(
             settings.radius,
@@ -333,7 +343,7 @@ export class ObjectManager {
             instanceObject.rotation.x = -Math.PI / 2; // Default grid orientation
         } else if (type === 'pointcloud') {
             instanceObject = new THREE.Points(geometry, material);
-        } else if (type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
+        } else if (type === 'sphere' || type === 'torus' || type === 'torusknot') {
             instanceObject = new THREE.Mesh(geometry, material);
         } else {
              console.error(`Unhandled object type for mesh/points creation: ${type}`);
@@ -351,10 +361,11 @@ export class ObjectManager {
         newSettings.highColor = new THREE.Color().copy(sourceSettings.highColor);
         newSettings.position = new THREE.Vector3(); // Always reset position/rotation for new instance
         newSettings.rotation = new THREE.Euler();
+        newSettings.rotationSpeed = new THREE.Vector3().copy(sourceSettings.rotationSpeed); // Clone rotation speed
         newSettings.type = type; // Ensure type is set
 
         // Apply specific material properties from settings
-        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
+        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
             material.wireframe = newSettings.wireframe;
         }
         if (type === 'pointcloud') {
@@ -371,13 +382,15 @@ export class ObjectManager {
         if (baseInstance) {
             instanceObject.position.copy(baseInstance.position);
             instanceObject.rotation.copy(baseInstance.rotation);
+            // Also copy autoRotate state if cloning
+            newSettings.autoRotate = sourceSettings.autoRotate;
         }
         // Initialize settings position/rotation from the object's current state
         instanceObject.userData.settings.position.copy(instanceObject.position);
         instanceObject.userData.settings.rotation.copy(instanceObject.rotation);
 
         // If it's a point cloud, sphere, torus, or torus knot, ensure its initial geometry matches its settings
-        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
+        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
              this.resetObjectInitialGeometry(instanceObject);
         }
 
@@ -402,6 +415,7 @@ export class ObjectManager {
         const type = settings.type;
         const controllers = []; // Local array
 
+        // --- Basic Controls ---
         controllers.push(
             guiFolder.add(settings, 'visible').name("Visible").onChange(val => instanceObject.visible = val),
             guiFolder.add(settings, 'audioInfluence', 0, 2).name("Audio Influence").step(0.1),
@@ -409,13 +423,15 @@ export class ObjectManager {
             guiFolder.add(settings, 'motionInfluenceFactor', 0, 1).name("Motion Influence").step(0.05)
         );
 
-        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
+        // --- Material Controls ---
+        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
              const material = instanceObject.material;
              controllers.push(
                  guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val)
              );
         }
 
+        // --- Type-Specific Geometry/Behavior Controls ---
         if (type === 'grid') {
             controllers.push(
                 guiFolder.add(settings, 'heightScale', 0.1, 10).name("Height Scale").step(0.1),
@@ -451,7 +467,7 @@ export class ObjectManager {
                  guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
                  guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
              );
-        } else if (type === 'torusknot') { // Added torusknot
+        } else if (type === 'torusknot') {
              controllers.push(
                  guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
                  guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
@@ -464,8 +480,25 @@ export class ObjectManager {
              );
         }
 
+        // --- Rotation Controls (Added) ---
+        const rotationFolder = guiFolder.addFolder('Rotation');
+        controllers.push(
+            rotationFolder.add(settings, 'autoRotate').name("Auto Rotate")
+        );
+        // Add separate controls for X, Y, Z rotation speed
+        controllers.push(
+            rotationFolder.add(settings.rotationSpeed, 'x', -Math.PI, Math.PI).name("Speed X").step(0.01)
+        );
+        controllers.push(
+            rotationFolder.add(settings.rotationSpeed, 'y', -Math.PI, Math.PI).name("Speed Y").step(0.01)
+        );
+        controllers.push(
+            rotationFolder.add(settings.rotationSpeed, 'z', -Math.PI, Math.PI).name("Speed Z").step(0.01)
+        );
+        // rotationFolder.open(); // Optional: Keep rotation folder open by default
 
-        // Common Color Controls
+
+        // --- Common Color Controls ---
         controllers.push(
             guiFolder.addColor(
                 { get lowColor() { return settings.lowColor.getHex() }, set lowColor(v) { settings.lowColor.setHex(v) } }, 'lowColor'
@@ -478,7 +511,7 @@ export class ObjectManager {
             ).name('High Color')
         );
 
-        // Add Reset Button
+        // --- Reset Button ---
         settings.resetFunc = () => { this.resetToDefaults(instanceObject); };
         controllers.push(guiFolder.add(settings, 'resetFunc').name("Reset Settings"));
 
@@ -494,11 +527,11 @@ export class ObjectManager {
 
         // Store current transform
         const currentPosition = instance.position.clone();
-        const currentRotation = instance.rotation.clone();
+        const currentRotation = instance.rotation.clone(); // Store current actual rotation
 
-        // Reset settings to defaults (handle colors separately)
+        // Reset settings to defaults
         for (const key in defaults) {
-            if (!['lowColor', 'midColor', 'highColor', 'position', 'rotation', 'type'].includes(key) && typeof defaults[key] !== 'function') {
+            if (!['lowColor', 'midColor', 'highColor', 'position', 'rotation', 'rotationSpeed', 'type'].includes(key) && typeof defaults[key] !== 'function') {
                  if (settings.hasOwnProperty(key)) {
                     // Use JSON parse/stringify for a deep copy of potential nested objects/arrays if any
                     settings[key] = JSON.parse(JSON.stringify(defaults[key]));
@@ -509,14 +542,18 @@ export class ObjectManager {
         settings.lowColor.copy(defaults.lowColor);
         settings.midColor.copy(defaults.midColor);
         settings.highColor.copy(defaults.highColor);
+        // Reset rotation speed
+        settings.rotationSpeed.copy(defaults.rotationSpeed); // Reset rotation speed vector
 
         // Restore transform settings to current object state (don't reset position/rotation)
         settings.position.copy(currentPosition);
+        // Reset the settings.rotation Euler to match the current object rotation
+        // This prevents the reset from snapping the object's rotation if it was auto-rotating
         settings.rotation.copy(currentRotation);
 
 
         // Reset specific material properties
-        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
+        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
             instance.material.wireframe = settings.wireframe;
         }
         if (type === 'pointcloud') {
@@ -524,7 +561,7 @@ export class ObjectManager {
         }
 
         // Reset geometry based on new default settings (if applicable)
-        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
+        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
              this.resetObjectInitialGeometry(instance);
         }
         // For grid, reset Z positions
@@ -541,7 +578,10 @@ export class ObjectManager {
 
         // Update GUI controllers
         instance.userData.controllers.forEach(controller => {
-            if (controller.property !== 'resetFunc') {
+            // Check if the controller belongs to the rotationSpeed object
+            if (controller.object === settings.rotationSpeed) {
+                 controller.updateDisplay();
+            } else if (controller.property !== 'resetFunc') {
                  controller.updateDisplay();
             }
         });
@@ -609,7 +649,7 @@ export class ObjectManager {
             geometry.attributes.position.needsUpdate = true;
         }
         // --- Sphere / Torus / Torus Knot Specific ---
-        else if (type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
+        else if (type === 'sphere' || type === 'torus' || type === 'torusknot') {
             // Recreate the geometry based on current settings
             let newGeometry;
             if (type === 'sphere') {
@@ -692,13 +732,32 @@ export class ObjectManager {
             const guiFolder = instanceToDelete.userData.guiFolder;
             if (guiFolder) {
                 guiFolder.close(); // Close it first
+
+                // Remove nested folders first (like 'Rotation')
+                const nestedFolders = Object.values(guiFolder.__folders);
+                nestedFolders.forEach(folder => {
+                    // Remove controllers within the nested folder
+                    folder.__controllers.forEach(controller => {
+                        try { folder.remove(controller); } catch (e) { console.warn("Could not remove nested controller:", controller.property, e); }
+                    });
+                    // Remove the nested folder itself
+                    try { guiFolder.removeFolder(folder); } catch (e) { console.warn("Could not remove nested GUI folder:", e); }
+                });
+
+
+                // Remove top-level controllers
                 instanceToDelete.userData.controllers.forEach(controller => {
-                    try {
-                        guiFolder.remove(controller);
-                    } catch (e) {
-                        console.warn("Could not remove controller:", controller.property, e);
+                    // Only remove if it's directly in this folder (not in a sub-folder)
+                    if (controller.parent === guiFolder) {
+                        try {
+                            guiFolder.remove(controller);
+                        } catch (e) {
+                            console.warn("Could not remove controller:", controller.property, e);
+                        }
                     }
                 });
+
+                // Remove the main folder
                 try {
                     this.gui.removeFolder(guiFolder);
                 } catch (e) {
@@ -869,7 +928,10 @@ export class ObjectManager {
             // Update position/rotation in settings when transform controls are used
             if (this.currentInstance) {
                 this.currentInstance.userData.settings.position.copy(this.currentInstance.position);
-                this.currentInstance.userData.settings.rotation.copy(this.currentInstance.rotation);
+                // Only update settings rotation if NOT auto-rotating, otherwise controls fight auto-rotation
+                if (!this.currentInstance.userData.settings.autoRotate) {
+                    this.currentInstance.userData.settings.rotation.copy(this.currentInstance.rotation);
+                }
             }
         });
 
@@ -915,6 +977,7 @@ export class ObjectManager {
 
         const type = settings.type;
 
+        // Geometry/Color updates based on audio/motion
         if (type === 'grid') {
             this.updateGridGeometry(instance, audioManager, motionScore, cameraSettings);
         } else if (type === 'pointcloud') {
@@ -923,7 +986,7 @@ export class ObjectManager {
             this.updateSphereGeometry(instance, audioManager, motionScore, cameraSettings);
         } else if (type === 'torus') {
             this.updateTorusGeometry(instance, audioManager, motionScore, cameraSettings);
-        } else if (type === 'torusknot') { // Added torusknot
+        } else if (type === 'torusknot') {
             this.updateTorusKnotGeometry(instance, audioManager, motionScore, cameraSettings);
         }
     }
@@ -1386,7 +1449,7 @@ export class ObjectManager {
         geometry.computeVertexNormals(); // Recompute normals after displacement
     }
 
-    updateTorusKnotGeometry(torusknot, audioManager, motionScore, cameraSettings) { // Added
+    updateTorusKnotGeometry(torusknot, audioManager, motionScore, cameraSettings) {
         const settings = torusknot.userData.settings;
         const geometry = torusknot.geometry;
         const positions = geometry.attributes.position.array;

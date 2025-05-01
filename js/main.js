@@ -122,7 +122,7 @@ const settings = {
     addPointCloud: () => objectManager.addInstance('pointcloud'),
     addSphere: () => objectManager.addInstance('sphere'),
     addTorus: () => objectManager.addInstance('torus'),
-    addTorusKnot: () => objectManager.addInstance('torusknot'), // Added
+    addTorusKnot: () => objectManager.addInstance('torusknot'),
     deleteCurrent: () => objectManager.deleteCurrent(),
 };
 
@@ -144,7 +144,7 @@ const cameraSettings = {
     cameraVisualizationEnabled: false,
     visualizationDepthScale: cameraVisualizer.options.depthScale,
     visualizationParticleSize: cameraVisualizer.options.particleSize,
-    visualizationColorMode: cameraVisualizer.options.colorMode, // Added
+    visualizationColorMode: cameraVisualizer.options.colorMode,
 };
 
 
@@ -156,8 +156,8 @@ globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onCh
 globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
     .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
-globalFolder.add(orbitControls, 'autoRotate').name("Auto Rotate");
-globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
+globalFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate"); // Renamed for clarity
+globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val); // Renamed for clarity
 // globalFolder.open();
 
 // Audio & Camera Folder
@@ -233,7 +233,7 @@ audioCameraFolder.add(cameraSettings, 'cameraVisualizationEnabled').name('Enable
         } else { cameraVisualizer.setVisible(false); if (!cameraSettings.cameraMotionEnabled) { cameraManager.stop(); } }
     });
 // --- Camera Visualizer Controls ---
-audioCameraFolder.add(cameraSettings, 'visualizationColorMode', ['brightness', 'color']).name('Vis Color Mode').onChange(val => cameraVisualizer.setColorMode(val)); // Added
+audioCameraFolder.add(cameraSettings, 'visualizationColorMode', ['brightness', 'color']).name('Vis Color Mode').onChange(val => cameraVisualizer.setColorMode(val));
 audioCameraFolder.add(cameraSettings, 'visualizationDepthScale', 1, 20).name('Vis Depth Scale').onChange(val => cameraVisualizer.setDepthScale(val));
 audioCameraFolder.add(cameraSettings, 'visualizationParticleSize', 0.01, 0.5).name('Vis Particle Size').onChange(val => cameraVisualizer.setParticleSize(val));
 audioCameraFolder.open();
@@ -255,7 +255,7 @@ instanceManagement.add(settings, 'addGrid').name("Add Grid");
 instanceManagement.add(settings, 'addPointCloud').name("Add Point Cloud");
 instanceManagement.add(settings, 'addSphere').name("Add Sphere");
 instanceManagement.add(settings, 'addTorus').name("Add Torus");
-instanceManagement.add(settings, 'addTorusKnot').name("Add Torus Knot"); // Added
+instanceManagement.add(settings, 'addTorusKnot').name("Add Torus Knot");
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
 instanceManagement.open();
 
@@ -364,7 +364,21 @@ function animate(timestamp) {
 
     // --- Update each managed object ---
     objectManager.instances.forEach(instance => {
-        objectManager.updateObject(instance, audioManager, motionScore, cameraSettings); // Call the manager's update method
+        const instanceSettings = instance.userData.settings;
+
+        // Apply Auto-Rotation (if enabled) - BEFORE updating geometry
+        if (instanceSettings.autoRotate) {
+            instance.rotation.x += instanceSettings.rotationSpeed.x * deltaTime;
+            instance.rotation.y += instanceSettings.rotationSpeed.y * deltaTime;
+            instance.rotation.z += instanceSettings.rotationSpeed.z * deltaTime;
+            // Keep the settings rotation Euler in sync if auto-rotating
+            // This prevents the TransformControls from fighting the auto-rotation visually
+            // when the object is selected.
+            instanceSettings.rotation.copy(instance.rotation);
+        }
+
+        // Update geometry based on audio/motion
+        objectManager.updateObject(instance, audioManager, motionScore, cameraSettings);
     });
 
     orbitControls.update(); // Update orbit controls
