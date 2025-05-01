@@ -305,11 +305,7 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 window.addEventListener('mousedown', (e) => {
     if (e.target.closest('.dg')) return; // Prevent interaction if clicking on GUI
 
-    // Check if the click is on the transform controls gizmo
-    // Note: TransformControls handles its own internal raycasting for the gizmo.
-    // We rely on the 'dragging-changed' event to know if interaction with the gizmo started.
-    // So, here we primarily focus on selecting the underlying objects.
-
+    // Update mouse coordinates
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
@@ -318,15 +314,19 @@ window.addEventListener('mousedown', (e) => {
     const intersects = raycaster.intersectObjects(intersectableObjects);
 
     if (intersects.length > 0) {
-        // If the click hits an object AND the transform controls are NOT currently being dragged, select the object.
-        // This prevents re-selecting the same object if you click on it while the gizmo is active.
-        if (!objectManager.transformControls || !objectManager.transformControls.dragging) {
-             objectManager.selectInstance(intersects[0].object); // Use objectManager
+        const clickedObject = intersects[0].object;
+        const currentSelected = objectManager.currentInstance;
+
+        // Only select the object if it's NOT the currently selected one.
+        // This prevents interfering with TransformControls when clicking the selected object (potentially aiming for the gizmo).
+        if (clickedObject !== currentSelected) {
+             objectManager.selectInstance(clickedObject); // Use objectManager
         }
+        // If clickedObject === currentSelected, do nothing here.
+        // Let TransformControls handle the event if the click was on the gizmo.
     }
     // If the click doesn't hit any managed object, we don't deselect here.
-    // Deselection might happen implicitly if the user clicks the gizmo (handled by TransformControls)
-    // or could be added explicitly (e.g., click empty space to deselect).
+    // Deselection could be added (e.g., click empty space to deselect).
 });
 
 window.addEventListener('mousemove', (e) => {
