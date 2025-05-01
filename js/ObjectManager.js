@@ -76,6 +76,27 @@ const defaultSettings = {
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
         rotation: new THREE.Euler()
+    },
+    torusknot: { // Added Torus Knot defaults
+        type: 'torusknot',
+        radius: 4,
+        tube: 1,
+        tubularSegments: 64, // Higher detail often needed
+        radialSegments: 8,
+        p: 2, // Knot parameter p
+        q: 3, // Knot parameter q
+        audioInfluence: 1.0,
+        displacementScale: 0.5, // Knots can get complex, start smaller
+        colorMapping: 'audio', // 'audio', 'frequencyBands', 'normal'
+        frequencyRange: 'mid', // 'low', 'mid', 'high'
+        visible: true,
+        wireframe: false,
+        motionInfluenceFactor: 0.4,
+        lowColor: new THREE.Color(0xff0000), // Red
+        midColor: new THREE.Color(0xffaa00), // Orange-Red
+        highColor: new THREE.Color(0xffffff), // White
+        position: new THREE.Vector3(),
+        rotation: new THREE.Euler()
     }
 };
 
@@ -97,7 +118,8 @@ export class ObjectManager {
             grid: this.createGridTemplate(),
             pointcloud: this.createPointCloudTemplate(),
             sphere: this.createSphereTemplate(),
-            torus: this.createTorusTemplate()
+            torus: this.createTorusTemplate(),
+            torusknot: this.createTorusKnotTemplate() // Added Torus Knot template
         };
         this.instanceCount = 0;
 
@@ -232,6 +254,43 @@ export class ObjectManager {
         };
     }
 
+    createTorusKnotTemplate() { // Added
+        const settings = defaultSettings.torusknot;
+        const geometry = new THREE.TorusKnotGeometry(
+            settings.radius,
+            settings.tube,
+            settings.tubularSegments,
+            settings.radialSegments,
+            settings.p,
+            settings.q
+        );
+        const numVertices = geometry.attributes.position.count;
+        const colors = new Float32Array(numVertices * 3);
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // Store initial positions and normals
+        geometry.userData = {
+            initialPositions: new Float32Array(geometry.attributes.position.array),
+            initialNormals: new Float32Array(geometry.attributes.normal.array)
+        };
+
+        const material = new THREE.MeshPhongMaterial({
+            vertexColors: true,
+            wireframe: settings.wireframe,
+            flatShading: true,
+            emissive: 0x220500,
+            specular: 0xff4400,
+            shininess: 50,
+            side: THREE.DoubleSide
+        });
+
+        return {
+            geometry,
+            material,
+            defaultSettings: settings
+        };
+    }
+
 
     // --- Instance Management ---
 
@@ -274,7 +333,7 @@ export class ObjectManager {
             instanceObject.rotation.x = -Math.PI / 2; // Default grid orientation
         } else if (type === 'pointcloud') {
             instanceObject = new THREE.Points(geometry, material);
-        } else if (type === 'sphere' || type === 'torus') {
+        } else if (type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
             instanceObject = new THREE.Mesh(geometry, material);
         } else {
              console.error(`Unhandled object type for mesh/points creation: ${type}`);
@@ -295,7 +354,7 @@ export class ObjectManager {
         newSettings.type = type; // Ensure type is set
 
         // Apply specific material properties from settings
-        if (type === 'grid' || type === 'sphere' || type === 'torus') {
+        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
             material.wireframe = newSettings.wireframe;
         }
         if (type === 'pointcloud') {
@@ -317,8 +376,8 @@ export class ObjectManager {
         instanceObject.userData.settings.position.copy(instanceObject.position);
         instanceObject.userData.settings.rotation.copy(instanceObject.rotation);
 
-        // If it's a point cloud, sphere, or torus, ensure its initial geometry matches its settings
-        if (type === 'pointcloud' || type === 'sphere' || type === 'torus') {
+        // If it's a point cloud, sphere, torus, or torus knot, ensure its initial geometry matches its settings
+        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
              this.resetObjectInitialGeometry(instanceObject);
         }
 
@@ -350,7 +409,7 @@ export class ObjectManager {
             guiFolder.add(settings, 'motionInfluenceFactor', 0, 1).name("Motion Influence").step(0.05)
         );
 
-        if (type === 'grid' || type === 'sphere' || type === 'torus') {
+        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
              const material = instanceObject.material;
              controllers.push(
                  guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val)
@@ -389,6 +448,17 @@ export class ObjectManager {
                  guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
                  guiFolder.add(settings, 'radialSegments', 3, 64).name("Radial Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
                  guiFolder.add(settings, 'tubularSegments', 3, 64).name("Tubular Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
+                 guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
+             );
+        } else if (type === 'torusknot') { // Added torusknot
+             controllers.push(
+                 guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'tubularSegments', 8, 256).name("Tubular Seg").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'radialSegments', 3, 64).name("Radial Seg").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'p', 1, 10).name("P (windings)").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'q', 1, 10).name("Q (windings)").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
                  guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
                  guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
              );
@@ -446,7 +516,7 @@ export class ObjectManager {
 
 
         // Reset specific material properties
-        if (type === 'grid' || type === 'sphere' || type === 'torus') {
+        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
             instance.material.wireframe = settings.wireframe;
         }
         if (type === 'pointcloud') {
@@ -454,7 +524,7 @@ export class ObjectManager {
         }
 
         // Reset geometry based on new default settings (if applicable)
-        if (type === 'pointcloud' || type === 'sphere' || type === 'torus') {
+        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
              this.resetObjectInitialGeometry(instance);
         }
         // For grid, reset Z positions
@@ -479,7 +549,7 @@ export class ObjectManager {
         console.log(`Instance ${instance.uuid} (${type}) settings reset to defaults.`);
     }
 
-    // Helper to reset point cloud, sphere, or torus geometry based on current settings
+    // Helper to reset point cloud, sphere, torus, or torus knot geometry based on current settings
     resetObjectInitialGeometry(instance) {
         if (!instance) return;
 
@@ -538,14 +608,23 @@ export class ObjectManager {
             }
             geometry.attributes.position.needsUpdate = true;
         }
-        // --- Sphere / Torus Specific ---
-        else if (type === 'sphere' || type === 'torus') {
+        // --- Sphere / Torus / Torus Knot Specific ---
+        else if (type === 'sphere' || type === 'torus' || type === 'torusknot') { // Added torusknot
             // Recreate the geometry based on current settings
             let newGeometry;
             if (type === 'sphere') {
                 newGeometry = new THREE.SphereGeometry(settings.radius, settings.widthSegments, settings.heightSegments);
-            } else { // Torus
+            } else if (type === 'torus') {
                 newGeometry = new THREE.TorusGeometry(settings.radius, settings.tube, settings.radialSegments, settings.tubularSegments);
+            } else { // Torus Knot
+                newGeometry = new THREE.TorusKnotGeometry(
+                    settings.radius,
+                    settings.tube,
+                    settings.tubularSegments,
+                    settings.radialSegments,
+                    settings.p,
+                    settings.q
+                );
             }
 
             // Dispose old geometry attributes
@@ -844,6 +923,8 @@ export class ObjectManager {
             this.updateSphereGeometry(instance, audioManager, motionScore, cameraSettings);
         } else if (type === 'torus') {
             this.updateTorusGeometry(instance, audioManager, motionScore, cameraSettings);
+        } else if (type === 'torusknot') { // Added torusknot
+            this.updateTorusKnotGeometry(instance, audioManager, motionScore, cameraSettings);
         }
     }
 
@@ -1214,6 +1295,109 @@ export class ObjectManager {
          // Ensure buffers match vertex count (basic check)
          if (initialPositions.length !== numVertices * 3 || initialNormals.length !== numVertices * 3 || colors.length !== numVertices * 3) {
              console.warn(`Torus buffer size mismatch. Skipping update.`);
+             return;
+         }
+
+        const averageAmplitude = audioManager.getAverageAmplitude(settings.frequencyRange); // Normalized 0-255
+
+        // Calculate effective parameters based on motion
+        let effectiveDisplacementScale = settings.displacementScale;
+        if (cameraSettings.cameraMotionEnabled && audioManager.audioContext && settings.motionInfluenceFactor > 0) {
+            const influence = motionScore * settings.motionInfluenceFactor;
+            effectiveDisplacementScale = settings.displacementScale * (1 + influence);
+        }
+
+        // Get frequency band data if needed
+        let lowAmpNorm = 0, midAmpNorm = 0, highAmpNorm = 0;
+        const useFreqBands = settings.colorMapping === 'frequencyBands';
+        if (useFreqBands && audioManager.audioContext) {
+            lowAmpNorm = audioManager.getAverageAmplitude('low') / 255;
+            midAmpNorm = audioManager.getAverageAmplitude('mid') / 255;
+            highAmpNorm = audioManager.getAverageAmplitude('high') / 255;
+        }
+
+        const tempColor = new THREE.Color(); // Reuse color object
+        const tempNormal = new THREE.Vector3(); // Reuse vector
+
+        for (let i = 0; i < numVertices; i++) {
+            const i3 = i * 3;
+
+            // --- Position Calculation ---
+            const initialX = initialPositions[i3];
+            const initialY = initialPositions[i3 + 1];
+            const initialZ = initialPositions[i3 + 2];
+
+            // Get the initial normal for this vertex
+            tempNormal.set(initialNormals[i3], initialNormals[i3 + 1], initialNormals[i3 + 2]);
+
+            let displacement = 0;
+            if (audioManager.audioContext) {
+                const normalizedAvgAmp = averageAmplitude / 255;
+                displacement = normalizedAvgAmp * effectiveDisplacementScale * settings.audioInfluence;
+            }
+
+            // Apply displacement along the initial normal
+            positions[i3] = initialX + tempNormal.x * displacement;
+            positions[i3 + 1] = initialY + tempNormal.y * displacement;
+            positions[i3 + 2] = initialZ + tempNormal.z * displacement;
+
+            // --- Color Calculation ---
+            let colorFactor = 0;
+            const normalizedAudio = averageAmplitude / 255;
+
+            switch (settings.colorMapping) {
+                case 'audio':
+                    colorFactor = THREE.MathUtils.clamp(normalizedAudio, 0, 1);
+                    break;
+                case 'frequencyBands':
+                    tempColor.setRGB(0, 0, 0);
+                    if (audioManager.audioContext) {
+                        tempColor.lerp(settings.lowColor, lowAmpNorm);
+                        tempColor.lerp(settings.midColor, midAmpNorm);
+                        tempColor.lerp(settings.highColor, highAmpNorm);
+                    } else {
+                        tempColor.copy(settings.midColor); // Default color if no audio
+                    }
+                    break;
+                case 'normal':
+                     // Color based on normal direction (e.g., map X,Y,Z to R,G,B)
+                     colorFactor = (tempNormal.x + 1) / 2; // Map X from [-1, 1] to [0, 1] for Red
+                     const gFactor = (tempNormal.y + 1) / 2; // Map Y for Green
+                     const bFactor = (tempNormal.z + 1) / 2; // Map Z for Blue
+                     tempColor.setRGB(colorFactor, gFactor, bFactor);
+                     break;
+            }
+
+            if (settings.colorMapping === 'audio') { // Only apply lerp for 'audio' mode
+                 if (colorFactor < 0.5) {
+                     tempColor.lerpColors(settings.lowColor, settings.midColor, colorFactor * 2);
+                 } else {
+                     tempColor.lerpColors(settings.midColor, settings.highColor, (colorFactor - 0.5) * 2);
+                 }
+            }
+
+            colors[i3] = tempColor.r;
+            colors[i3 + 1] = tempColor.g;
+            colors[i3 + 2] = tempColor.b;
+        }
+
+        geometry.attributes.position.needsUpdate = true;
+        geometry.attributes.color.needsUpdate = true;
+        geometry.computeVertexNormals(); // Recompute normals after displacement
+    }
+
+    updateTorusKnotGeometry(torusknot, audioManager, motionScore, cameraSettings) { // Added
+        const settings = torusknot.userData.settings;
+        const geometry = torusknot.geometry;
+        const positions = geometry.attributes.position.array;
+        const colors = geometry.attributes.color.array;
+        const initialPositions = geometry.userData.initialPositions;
+        const initialNormals = geometry.userData.initialNormals;
+        const numVertices = positions.length / 3;
+
+         // Ensure buffers match vertex count (basic check)
+         if (initialPositions.length !== numVertices * 3 || initialNormals.length !== numVertices * 3 || colors.length !== numVertices * 3) {
+             console.warn(`Torus Knot buffer size mismatch. Skipping update.`);
              return;
          }
 

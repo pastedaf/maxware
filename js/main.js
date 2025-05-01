@@ -120,8 +120,9 @@ const settings = {
     // Instance Management Functions (bound to GUI)
     addGrid: () => objectManager.addInstance('grid'),
     addPointCloud: () => objectManager.addInstance('pointcloud'),
-    addSphere: () => objectManager.addInstance('sphere'), // Added
-    addTorus: () => objectManager.addInstance('torus'),   // Added
+    addSphere: () => objectManager.addInstance('sphere'),
+    addTorus: () => objectManager.addInstance('torus'),
+    addTorusKnot: () => objectManager.addInstance('torusknot'), // Added
     deleteCurrent: () => objectManager.deleteCurrent(),
 };
 
@@ -252,8 +253,9 @@ ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = v
 const instanceManagement = gui.addFolder('Instance Management');
 instanceManagement.add(settings, 'addGrid').name("Add Grid");
 instanceManagement.add(settings, 'addPointCloud').name("Add Point Cloud");
-instanceManagement.add(settings, 'addSphere').name("Add Sphere"); // Added
-instanceManagement.add(settings, 'addTorus').name("Add Torus");   // Added
+instanceManagement.add(settings, 'addSphere').name("Add Sphere");
+instanceManagement.add(settings, 'addTorus').name("Add Torus");
+instanceManagement.add(settings, 'addTorusKnot').name("Add Torus Knot"); // Added
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
 instanceManagement.open();
 
@@ -374,5 +376,6 @@ function animate(timestamp) {
 objectManager.addInstance('grid'); // Add the initial grid
 // objectManager.addInstance('pointcloud'); // Optionally add a point cloud initially
 // objectManager.addInstance('sphere'); // Optionally add a sphere initially
+// objectManager.addInstance('torusknot'); // Optionally add a torus knot initially
 objectManager.setupTransformControls(camera, renderer, orbitControls); // Setup controls *after* first instance exists
 animate(0); // Start the animation loop
