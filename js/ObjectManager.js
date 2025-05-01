@@ -7,7 +7,7 @@ const defaultSettings = {
     grid: {
         type: 'grid',
         audioInfluence: 1.0,
-        decayRate: 0.98,
+        // decayRate: 0.98, // Removed - related to poke effect
         heightScale: 3,
         colorMapping: 'height', // 'height', 'audio', 'combined', 'frequencyBands'
         wavePattern: 'radial', // 'radial', 'linear', 'random', 'sineWave', 'checkerboard'
@@ -15,8 +15,8 @@ const defaultSettings = {
         visible: true,
         wireframe: false,
         motionInfluenceFactor: 0.5,
-        pokeStrength: 0.2,
-        pokeRadius: 1.5,
+        // pokeStrength: 0.2, // Removed
+        // pokeRadius: 1.5, // Removed
         lowColor: new THREE.Color(0x003300),
         midColor: new THREE.Color(0x00ff00),
         highColor: new THREE.Color(0xffffff),
@@ -68,7 +68,8 @@ export class ObjectManager {
         const geometry = new THREE.PlaneGeometry(this.gridSize, this.gridSize, this.gridSegments, this.gridSegments);
         const colors = new Float32Array(this.gridVerticesCount * 3);
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        geometry.userData = { originalZ: new Float32Array(geometry.attributes.position.array.filter((_, i) => (i + 1) % 3 === 0)) };
+        // Keep original Z positions (which are 0 for PlaneGeometry)
+        geometry.userData = { originalZ: new Float32Array(this.gridVerticesCount).fill(0) }; // Simpler init
 
         const material = new THREE.MeshPhongMaterial({
             vertexColors: true,
@@ -210,9 +211,9 @@ export class ObjectManager {
             controllers: [] // To keep track of GUI controllers for removal
         };
         // Add type-specific data if needed
-        if (type === 'grid') {
-             instanceObject.userData.targetHeights = new Float32Array(this.gridVerticesCount);
-        }
+        // if (type === 'grid') {
+             // instanceObject.userData.targetHeights = new Float32Array(this.gridVerticesCount); // Removed - targetHeights not needed without poke
+        // }
 
 
         if (baseInstance) {
@@ -255,9 +256,9 @@ export class ObjectManager {
             controllers.push(
                 guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val),
                 guiFolder.add(settings, 'heightScale', 0.1, 10).name("Height Scale").step(0.1),
-                guiFolder.add(settings, 'decayRate', 0.9, 0.999).name("Poke Decay").step(0.001),
-                guiFolder.add(settings, 'pokeStrength', 0.05, 1.0).name("Poke Strength").step(0.05),
-                guiFolder.add(settings, 'pokeRadius', 0.5, 5.0).name("Poke Radius").step(0.1),
+                // guiFolder.add(settings, 'decayRate', 0.9, 0.999).name("Poke Decay").step(0.001), // Removed
+                // guiFolder.add(settings, 'pokeStrength', 0.05, 1.0).name("Poke Strength").step(0.05), // Removed
+                // guiFolder.add(settings, 'pokeRadius', 0.5, 5.0).name("Poke Radius").step(0.1), // Removed
                 guiFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined', 'frequencyBands']).name("Color Mapping"),
                 guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random', 'sineWave', 'checkerboard']).name("Wave Pattern")
             );
@@ -318,8 +319,8 @@ export class ObjectManager {
         // Reset specific material properties
         if (type === 'grid') {
             instance.material.wireframe = settings.wireframe;
-            // Reset target heights
-            instance.userData.targetHeights.fill(0);
+            // Reset target heights (no longer needed)
+            // instance.userData.targetHeights.fill(0);
         } else if (type === 'pointcloud') {
              instance.material.size = settings.particleSize;
              this.resetPointCloudDistribution(instance); // Reset positions based on new settings
@@ -446,7 +447,7 @@ export class ObjectManager {
 
     selectInstance(instance) {
         if (this.instances.includes(instance)) {
-            console.log(`[ObjectManager] Selecting instance: ${instance.uuid} (${instance.userData.settings.type})`); // Debug log
+            // console.log(`[ObjectManager] Selecting instance: ${instance.uuid} (${instance.userData.settings.type})`); // Debug log
             // Close previously selected instance's GUI folder
             if (this.currentInstance && this.currentInstance !== instance && this.currentInstance.userData.guiFolder) {
                  this.currentInstance.userData.guiFolder.close();
@@ -454,9 +455,9 @@ export class ObjectManager {
 
             this.currentInstance = instance;
             if (this.transformControls) {
-                console.log(`[ObjectManager] Attaching transform controls to ${instance.uuid}`); // Debug log
+                // console.log(`[ObjectManager] Attaching transform controls to ${instance.uuid}`); // Debug log
                 this.transformControls.attach(instance);
-                console.log(`[ObjectManager] Transform controls visible after attach: ${this.transformControls.visible}`); // ADDED LOG
+                // console.log(`[ObjectManager] Transform controls visible after attach: ${this.transformControls.visible}`); // ADDED LOG
                 // Attach should make the controls visible automatically
             } else {
                  console.warn("[ObjectManager] Transform controls not available for attachment."); // Debug log
@@ -465,7 +466,7 @@ export class ObjectManager {
             if (this.currentInstance.userData.guiFolder) {
                 this.currentInstance.userData.guiFolder.open();
             }
-            console.log(`[ObjectManager] Selected instance: ${instance.uuid}`);
+            // console.log(`[ObjectManager] Selected instance: ${instance.uuid}`);
         } else {
              console.warn("[ObjectManager] Attempted to select an instance not managed by ObjectManager.");
         }
@@ -474,7 +475,7 @@ export class ObjectManager {
     setupTransformControls(camera, renderer, orbitControls) {
         this.orbitControls = orbitControls; // Store reference
         this.transformControls = new TransformControls(camera, renderer.domElement);
-        this.transformControls.enabled = true; // ADDED: Explicitly enable
+        // this.transformControls.enabled = true; // Not needed, enabled by default
         // Visibility is handled by attach/detach, start detached (invisible)
 
         this.transformControls.addEventListener('dragging-changed', event => {
@@ -491,19 +492,20 @@ export class ObjectManager {
             }
         });
 
-        // Add the transform controls OBJECT to the scene for interaction
+        // Add the transform controls OBJECT to the scene.
+        // This object itself contains the visual gizmo (helper).
         this.scene.add(this.transformControls);
-        console.log("[ObjectManager] Transform controls object added to scene."); // Debug log
-        // ALSO add the helper explicitly to ensure visibility based on user feedback
-        this.scene.add(this.transformControls.getHelper());
-        console.log("[ObjectManager] Transform controls helper added to scene."); // Debug log
+        console.log("[ObjectManager] Transform controls object added to scene.");
+
+        // DO NOT add the helper separately. The main object IS the helper/gizmo.
+        // this.scene.add(this.transformControls.getHelper()); // REMOVED
 
         // Select the first instance if available after setup
         if (this.instances.length > 0) {
             this.selectInstance(this.instances[0]);
         } else {
             // Ensure controls are hidden if no initial instance exists
-            this.transformControls.detach(); // Detach should hide helper
+            this.transformControls.detach(); // Detach should hide gizmo
         }
     }
 
@@ -533,22 +535,23 @@ export class ObjectManager {
         const frequencyData = audioManager.getFrequencyRangeData(settings.frequencyRange);
         const vertices = grid.geometry.attributes.position.array;
         const colors = grid.geometry.attributes.color.array;
-        const targetHeights = grid.userData.targetHeights;
+        // const targetHeights = grid.userData.targetHeights; // Removed - targetHeights not needed
 
         const size = grid.geometry.parameters.width;
         const segments = grid.geometry.parameters.widthSegments;
         const verticesPerSide = segments + 1;
         const halfSize = size / 2;
         const maxDistance = Math.sqrt(halfSize * halfSize + halfSize * halfSize);
+        const verticesCount = vertices.length / 3; // Use actual vertices count
 
         // Calculate effective parameters based on motion
         let effectiveHeightScale = settings.heightScale;
-        let effectiveDecayRate = settings.decayRate;
+        // let effectiveDecayRate = settings.decayRate; // Removed
         if (cameraSettings.cameraMotionEnabled && audioManager.audioContext && settings.motionInfluenceFactor > 0) { // Check audio context too
             const influence = motionScore * settings.motionInfluenceFactor;
             effectiveHeightScale = settings.heightScale * (1 + influence);
-            effectiveDecayRate = settings.decayRate + (1.0 - settings.decayRate) * influence * 0.5;
-            effectiveDecayRate = Math.min(effectiveDecayRate, 0.999);
+            // effectiveDecayRate = settings.decayRate + (1.0 - settings.decayRate) * influence * 0.5; // Removed
+            // effectiveDecayRate = Math.min(effectiveDecayRate, 0.999); // Removed
         }
 
         // Get frequency band data if needed
@@ -563,9 +566,9 @@ export class ObjectManager {
         const time = performance.now() * 0.002;
         const tempColor = new THREE.Color(); // Reuse color object
 
-        for (let i = 0; i < targetHeights.length; i++) {
-            const x = (i % verticesPerSide) * (size / segments) - halfSize;
-            const y = Math.floor(i / verticesPerSide) * (size / segments) - halfSize;
+        for (let i = 0; i < verticesCount; i++) { // Iterate up to verticesCount
+            const x = vertices[i * 3]; // Get X from position attribute
+            const y = vertices[i * 3 + 1]; // Get Y from position attribute (local Y, world Z)
 
             let audioValue = 0;
             let patternHeight = 0;
@@ -579,7 +582,9 @@ export class ObjectManager {
                         audioValue = frequencyData[index] || 0;
                         break;
                     case 'linear':
-                        audioValue = frequencyData[i % frequencyData.length] || 0;
+                        // Map vertex index to frequency data index more carefully
+                        const linearIndex = i % frequencyData.length;
+                        audioValue = frequencyData[linearIndex] || 0;
                         break;
                     case 'random':
                         audioValue = frequencyData[Math.floor(Math.random() * frequencyData.length)] || 0;
@@ -597,22 +602,25 @@ export class ObjectManager {
                         audioValue = ((checkX + checkY) % 2 === 0) ? lowAmp : highAmp;
                         break;
                     default:
-                        audioValue = frequencyData[i % frequencyData.length] || 0;
+                         const defaultIndex = i % frequencyData.length;
+                         audioValue = frequencyData[defaultIndex] || 0;
                 }
             }
 
             const audioHeight = (audioValue / 255) * effectiveHeightScale * settings.audioInfluence;
             const totalPatternHeight = audioHeight + (patternHeight * effectiveHeightScale * settings.audioInfluence);
 
-            targetHeights[i] *= effectiveDecayRate;
-            if (targetHeights[i] < 0.01) targetHeights[i] = 0;
+            // Removed targetHeights decay logic
+            // targetHeights[i] *= effectiveDecayRate;
+            // if (targetHeights[i] < 0.01) targetHeights[i] = 0;
 
-            const finalHeight = Math.max(targetHeights[i], totalPatternHeight);
-            vertices[i * 3 + 2] = finalHeight;
+            // const finalHeight = Math.max(targetHeights[i], totalPatternHeight); // Use only pattern height now
+            const finalHeight = totalPatternHeight;
+            vertices[i * 3 + 2] = finalHeight; // Set Z position (local Z, world Y)
 
             // --- Color Calculation ---
             let colorFactor = 0;
-            const normalizedHeight = finalHeight / effectiveHeightScale;
+            const normalizedHeight = finalHeight / effectiveHeightScale; // Normalize based on effective scale
             const normalizedAudio = audioValue / 255;
 
             switch (settings.colorMapping) {
@@ -752,12 +760,11 @@ export class ObjectManager {
     dispose() {
         console.log("Disposing ObjectManager...");
         if (this.transformControls) {
-            // Remove helper first if it was added separately
-            const helper = this.transformControls.getHelper(); // Get helper reference
-            if (helper && helper.parent) { // Check if helper exists and is in scene
-                 this.scene.remove(helper);
-                 console.log("[ObjectManager] Transform controls helper removed from scene.");
-            }
+            // Remove helper first if it was added separately - NO LONGER NEEDED
+            // const helper = this.transformControls.getHelper();
+            // if (helper && helper.parent) {
+            //      this.scene.remove(helper);
+            // }
             this.transformControls.dispose();
             // Remove the main control object from the scene
             if (this.transformControls.parent) { // Check if main control object is in scene

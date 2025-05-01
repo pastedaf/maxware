@@ -301,9 +301,13 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 });
 
 
-// Mouse Interaction for Object Selection / Grid Modification
+// Mouse Interaction for Object Selection
 window.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.dg')) return; // Prevent interaction if clicking on GUI
+    // Ignore clicks on the GUI
+    if (e.target.closest('.dg')) return;
+
+    // Ignore clicks if TransformControls is currently being dragged
+    if (objectManager.transformControls?.dragging) return;
 
     // Update mouse coordinates
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
@@ -331,6 +335,7 @@ window.addEventListener('mousedown', (e) => {
 
 window.addEventListener('mousemove', (e) => {
     // Update the dragging flag based on transform controls state
+    // This flag isn't strictly needed anymore but doesn't hurt
     isDraggingObject = objectManager.transformControls?.dragging ?? false;
 
     if (isDraggingObject) {
@@ -339,21 +344,8 @@ window.addEventListener('mousemove', (e) => {
         return;
     }
 
-    // If not dragging the object, check for hover effects (like poking the grid)
-    if (objectManager.currentInstance && objectManager.currentInstance.userData.settings.type === 'grid') {
-        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    // Removed the grid poking logic here
 
-        raycaster.setFromCamera(mouse, camera);
-        // Only intersect with the currently selected grid for poking
-        const intersects = raycaster.intersectObject(objectManager.currentInstance);
-
-        if (intersects.length > 0) {
-            // Convert intersection point to the grid's local coordinates
-            const localPoint = objectManager.currentInstance.worldToLocal(intersects[0].point.clone());
-            pokeGrid(objectManager.currentInstance, localPoint); // Call pokeGrid
-        }
-    }
     // Note: Standard orbit controls dragging happens automatically if orbitControls.enabled is true
     // and the mouse event is not intercepted by the transform controls or the GUI.
 });
@@ -375,44 +367,7 @@ window.addEventListener('resize', () => {
 
 // --- Core Logic Functions ---
 
-// Renamed from modifyGrid, only affects grids
-function pokeGrid(grid, point) {
-    // Ensure it's actually a grid before proceeding
-    if (!grid || grid.userData.settings.type !== 'grid') return;
-
-    const vertices = grid.geometry.attributes.position.array;
-    const targetHeights = grid.userData.targetHeights;
-    const settings = grid.userData.settings;
-    const size = grid.geometry.parameters.width;
-    const segments = grid.geometry.parameters.widthSegments;
-    const verticesPerSide = segments + 1;
-    const halfSize = size / 2;
-
-    const modificationRadius = settings.pokeRadius;
-    const pokeStrength = settings.pokeStrength;
-    const maxPokeHeight = settings.heightScale * 1.5;
-
-    for (let i = 0; i < targetHeights.length; i++) {
-        // Calculate vertex's original X, Y position on the plane
-        // Note: Assuming grid is oriented with rotation.x = -PI/2, so local X/Y correspond to world X/Z
-        const vertexIndex = i * 3;
-        const x = vertices[vertexIndex];     // Local X
-        const y = vertices[vertexIndex + 1]; // Local Y (which is world Z due to rotation)
-
-        // Compare with the intersection point's local X and Y
-        const dx = x - point.x;
-        const dy = y - point.y; // Compare local Y of vertex with local Y of intersection point
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance < modificationRadius) {
-            const falloff = 1 - (distance / modificationRadius);
-            const strength = falloff * pokeStrength;
-            // Increase target height (which affects local Z, world Y)
-            targetHeights[i] = Math.min(targetHeights[i] + strength, maxPokeHeight);
-        }
-    }
-    // updateObject handles needsUpdate flags
-}
+// Removed pokeGrid function
 
 // updateGrid function is now part of ObjectManager (updateObject)
 
