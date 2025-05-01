@@ -32,7 +32,7 @@ renderer.setPixelRatio(window.devicePixelRatio);
 const orbitControls = new OrbitControls(camera, renderer.domElement);
 orbitControls.enableDamping = true;
 orbitControls.dampingFactor = 0.05;
-orbitControls.autoRotate = true;
+orbitControls.autoRotate = false;
 orbitControls.autoRotateSpeed = 1.0;
 
 // --- GUI ---
