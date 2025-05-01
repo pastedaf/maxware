@@ -307,37 +307,24 @@ window.addEventListener('mousedown', (e) => {
     // 1. Ignore clicks on the GUI
     if (e.target.closest('.dg')) return;
 
-    // 2. Record the starting position for click detection in mouseup
+    // 2. Check if TransformControls gizmo is hovered. If so, let it handle the event.
+    const controls = objectManager.transformControls;
+    if (controls?.hovered) {
+        // console.log("Mousedown on hovered gizmo - letting TransformControls handle.");
+        return;
+    }
+
+    // 3. Record the starting position for click detection in mouseup
     onDownPosition.x = e.clientX;
     onDownPosition.y = e.clientY;
 
-    // 3. DO NOT check for gizmo hover/drag here, let TransformControls handle its events.
     // 4. DO NOT raycast or select/deselect here.
 });
 
 window.addEventListener('mousemove', (e) => {
-    // 1. Ignore if GUI is involved or if TransformControls is dragging
-    if (e.target.closest('.dg') || objectManager.transformControls?.dragging) {
-        return;
-    }
-
-    // 2. Update mouse coords and raycast
-    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    raycaster.setFromCamera(mouse, camera);
-
-    // 3. Check for intersections with selectable objects
-    const intersectableObjects = objectManager.instances;
-    const intersects = raycaster.intersectObjects(intersectableObjects, false);
-
-    if (intersects.length > 0) {
-        const object = intersects[0].object;
-        // 4. If intersected object is different from the current one, select it
-        if (object !== objectManager.currentInstance) {
-            objectManager.selectInstance(object);
-        }
-    }
-    // 5. DO NOT deselect here. Deselection happens on mouseup click.
+    // No selection/deselection logic needed here.
+    // OrbitControls handles camera drag.
+    // TransformControls handles gizmo drag internally.
 });
 
 window.addEventListener('mouseup', (e) => {
@@ -347,7 +334,8 @@ window.addEventListener('mouseup', (e) => {
     // 2. Check if TransformControls was dragging. If so, it handled the interaction.
     const controls = objectManager.transformControls;
     if (controls?.dragging) {
-        // Drag just ended. OrbitControls will be re-enabled by the 'dragging-changed' listener.
+        // console.log("Mouseup after dragging gizmo - interaction handled.");
+        // OrbitControls are re-enabled by the 'dragging-changed' listener in ObjectManager
         return;
     }
 
@@ -355,14 +343,22 @@ window.addEventListener('mouseup', (e) => {
     onUpPosition.x = e.clientX;
     onUpPosition.y = e.clientY;
 
-    if (onDownPosition.distanceTo(onUpPosition) > 2) { // Slightly larger drag tolerance
-        // It was likely an OrbitControls drag or a completed TransformControls drag.
-        // Do nothing for selection/deselection.
+    if (onDownPosition.distanceTo(onUpPosition) > 2) { // Click vs drag threshold
+        // console.log("Mouseup was a drag (OrbitControls?) - no selection change.");
+        return; // Considered a drag, not a click for selection purposes
+    }
+
+    // 4. It was a CLICK. Check if the click was on the gizmo itself.
+    //    We need to check controls.hovered *again* here because the state might have
+    //    changed between mousedown and mouseup if the mouse moved slightly over/off the gizmo.
+    if (controls?.hovered) {
+        // console.log("Mouseup click on hovered gizmo - letting TransformControls handle.");
+        // Although not dragging, the click landed on the gizmo, let TC handle potential mode changes etc.
         return;
     }
 
-    // 4. It was a CLICK. Check if we clicked on empty space.
-    // We need to raycast *again* here to be sure where the click landed.
+    // 5. It was a CLICK, and it was NOT on the gizmo. Perform selection/deselection raycast.
+    // console.log("Mouseup was a click off gizmo - performing raycast.");
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
@@ -370,16 +366,22 @@ window.addEventListener('mouseup', (e) => {
     const intersectableObjects = objectManager.instances;
     const intersects = raycaster.intersectObjects(intersectableObjects, false);
 
-    // Also check if the click was on the gizmo itself (TransformControls handles this internally,
-    // but we don't want to deselect if the click landed on the gizmo)
-    const isClickOnGizmo = controls?.hovered; // Check if gizmo was hovered at the moment of click
-
-    if (intersects.length === 0 && !isClickOnGizmo) {
-        // Clicked on empty space (and not the gizmo)
+    if (intersects.length > 0) {
+        // Clicked on a managed object
+        const clickedObject = intersects[0].object;
+        // console.log("Raycast hit object:", clickedObject.uuid);
+        // Select the object (this handles attaching controls)
+        // Check if it's already selected to avoid unnecessary work
+        if (objectManager.currentInstance !== clickedObject) {
+             objectManager.selectInstance(clickedObject);
+        } else {
+            // console.log("Clicked on already selected object - no change.");
+        }
+    } else {
+        // Clicked on empty space
+        // console.log("Raycast hit nothing - deselecting.");
         objectManager.deselectInstance();
     }
-    // If intersects.length > 0, the click was on an object. Selection was handled by mousemove. Do nothing.
-    // If isClickOnGizmo is true, the click was on the gizmo. TransformControls handles it. Do nothing.
 });
 
 
