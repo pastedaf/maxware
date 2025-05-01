@@ -60,6 +60,19 @@ export class ObjectManager {
             pointcloud: this.createPointCloudTemplate()
         };
         this.instanceCount = 0;
+
+        // For interaction logic within ObjectManager
+        this.camera = null; // Will be set in setupTransformControls
+        this.rendererElement = null; // Will be set in setupTransformControls
+        this.raycaster = new THREE.Raycaster();
+        this.pointer = new THREE.Vector2();
+        this.onDownPosition = new THREE.Vector2();
+        this.onUpPosition = new THREE.Vector2();
+
+        // Store bound event listeners for removal
+        this.boundOnPointerDown = null;
+        this.boundOnPointerMove = null;
+        this.boundOnPointerUp = null;
     }
 
     // --- Template Creation ---
@@ -486,9 +499,88 @@ export class ObjectManager {
         }
     }
 
+    // --- Interaction Logic (moved from main.js) ---
+
+    onPointerDown(event) {
+        // Ignore clicks originating from the GUI
+        if (event.target.closest('.dg')) return;
+
+        // If TransformControls is hovered, let it handle the event.
+        // It will manage disabling OrbitControls via the 'dragging-changed' event.
+        if (this.transformControls?.hovered) {
+            return;
+        }
+
+        // Record the starting position for click detection in onPointerUp
+        this.onDownPosition.x = event.clientX;
+        this.onDownPosition.y = event.clientY;
+    }
+
+    onPointerMove(event) {
+        // No selection logic needed on move in this approach.
+        // OrbitControls handles camera drag when not dragging the gizmo.
+        // TransformControls handles gizmo drag internally.
+
+        // Update pointer coordinates for potential use (e.g., hover effects if added later)
+        this.pointer.x = (event.clientX / this.rendererElement.clientWidth) * 2 - 1;
+        this.pointer.y = -(event.clientY / this.rendererElement.clientHeight) * 2 + 1;
+    }
+
+    onPointerUp(event) {
+        // Ignore events originating from the GUI
+        if (event.target.closest('.dg')) return;
+
+        // If TransformControls was dragging, it handled the interaction.
+        if (this.transformControls?.dragging) {
+            // OrbitControls are re-enabled via the 'dragging-changed' listener.
+            return;
+        }
+
+        // Record the up position and check if it was a click (minimal movement)
+        this.onUpPosition.x = event.clientX;
+        this.onUpPosition.y = event.clientY;
+
+        if (this.onDownPosition.distanceTo(this.onUpPosition) > 2) { // Click vs drag threshold
+            // Considered a drag (likely OrbitControls), not a click for selection.
+            return;
+        }
+
+        // --- It was a CLICK ---
+
+        // Check if the click was on the gizmo itself (even if not dragging).
+        // If hovered at the moment of pointerup, let TransformControls handle it.
+        if (this.transformControls?.hovered) {
+            return;
+        }
+
+        // --- It was a CLICK, and NOT on the gizmo ---
+        // Perform selection/deselection raycast.
+        this.pointer.x = (event.clientX / this.rendererElement.clientWidth) * 2 - 1;
+        this.pointer.y = -(event.clientY / this.rendererElement.clientHeight) * 2 + 1;
+        this.raycaster.setFromCamera(this.pointer, this.camera);
+
+        const intersects = this.raycaster.intersectObjects(this.instances, false);
+
+        if (intersects.length > 0) {
+            // Clicked on a managed object
+            const clickedObject = intersects[0].object;
+            if (this.currentInstance !== clickedObject) {
+                this.selectInstance(clickedObject);
+            }
+        } else {
+            // Clicked on empty space - Deselect
+            this.deselectInstance();
+        }
+    }
+
+
+    // --- Setup / Teardown ---
+
     setupTransformControls(camera, renderer, orbitControls) {
+        this.camera = camera; // Store camera reference
+        this.rendererElement = renderer.domElement; // Store renderer DOM element
         this.orbitControls = orbitControls; // Store reference
-        this.transformControls = new TransformControls(camera, renderer.domElement);
+        this.transformControls = new TransformControls(this.camera, this.rendererElement);
 
         this.transformControls.addEventListener('dragging-changed', event => {
             if (this.orbitControls) {
@@ -505,13 +597,22 @@ export class ObjectManager {
         });
 
         // Add the transform controls OBJECT to the scene.
-        // This object itself contains the visual gizmo (helper).
         this.scene.add(this.transformControls);
         console.log("[ObjectManager] Transform controls object added to scene.");
 
-        // ADDED: Explicitly add the helper as well, like in the example script
+        // Explicitly add the helper as well
         this.scene.add(this.transformControls.getHelper());
         console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
+
+        // --- Add event listeners directly to the renderer element ---
+        this.boundOnPointerDown = this.onPointerDown.bind(this);
+        this.boundOnPointerMove = this.onPointerMove.bind(this);
+        this.boundOnPointerUp = this.onPointerUp.bind(this);
+
+        this.rendererElement.addEventListener('pointerdown', this.boundOnPointerDown);
+        this.rendererElement.addEventListener('pointermove', this.boundOnPointerMove);
+        this.rendererElement.addEventListener('pointerup', this.boundOnPointerUp);
+        console.log("[ObjectManager] Interaction listeners added to renderer element.");
 
 
         // Select the first instance if available after setup
@@ -773,6 +874,21 @@ export class ObjectManager {
 
     dispose() {
         console.log("Disposing ObjectManager...");
+
+        // Remove event listeners added in setupTransformControls
+        if (this.rendererElement) {
+            this.rendererElement.removeEventListener('pointerdown', this.boundOnPointerDown);
+            this.rendererElement.removeEventListener('pointermove', this.boundOnPointerMove);
+            this.rendererElement.removeEventListener('pointerup', this.boundOnPointerUp);
+            console.log("[ObjectManager] Interaction listeners removed from renderer element.");
+        }
+        this.boundOnPointerDown = null;
+        this.boundOnPointerMove = null;
+        this.boundOnPointerUp = null;
+        this.rendererElement = null;
+        this.camera = null;
+
+
         if (this.transformControls) {
             // Detach from any object first
             this.transformControls.detach();

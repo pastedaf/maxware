@@ -250,10 +250,6 @@ instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
 instanceManagement.open();
 
 // --- Event Listeners ---
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-const onDownPosition = new THREE.Vector2(); // For click detection
-const onUpPosition = new THREE.Vector2();   // For click detection
 
 // Hidden Audio File Input Listener
 document.getElementById('audioInput').addEventListener('change', async (e) => {
@@ -302,69 +298,13 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 });
 
 
-// Mouse Interaction for Object Selection / Deselection
-window.addEventListener('mousedown', (e) => {
-    // 1. Ignore clicks on the GUI
-    if (e.target.closest('.dg')) return;
-
-    // 2. Record the starting position for click detection in mouseup
-    onDownPosition.x = e.clientX;
-    onDownPosition.y = e.clientY;
-
-    // 3. DO NOT check for gizmo hover or raycast here. Let the event propagate.
-    //    TransformControls will handle its own mousedown on the gizmo.
-});
-
-window.addEventListener('mousemove', (e) => {
-    // No selection/deselection logic needed here.
-});
-
-window.addEventListener('mouseup', (e) => {
-    // 1. Ignore clicks on the GUI
-    if (e.target.closest('.dg')) return;
-
-    // 2. Check if TransformControls is currently dragging. If so, it handled the interaction.
-    const controls = objectManager.transformControls;
-    if (controls?.dragging) {
-        // Drag just ended. OrbitControls are re-enabled by the 'dragging-changed' listener.
-        return;
-    }
-
-    // 3. Record the up position and check if it was a click (minimal movement)
-    onUpPosition.x = e.clientX;
-    onUpPosition.y = e.clientY;
-
-    if (onDownPosition.distanceTo(onUpPosition) > 2) { // Click vs drag threshold
-        // Considered a drag (likely OrbitControls), not a click for selection.
-        return;
-    }
-
-    // 4. It was a CLICK. Perform selection/deselection raycast.
-    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    raycaster.setFromCamera(mouse, camera);
-
-    const intersectableObjects = objectManager.instances;
-    const intersects = raycaster.intersectObjects(intersectableObjects, false);
-
-    if (intersects.length > 0) {
-        // Clicked on a managed object
-        const clickedObject = intersects[0].object;
-        // Select the object (ObjectManager handles attaching controls)
-        // Check if it's already selected to potentially avoid redundant actions, though selectInstance should handle this.
-        if (objectManager.currentInstance !== clickedObject) {
-             objectManager.selectInstance(clickedObject);
-        }
-    } else {
-        // Clicked on empty space - Deselect
-        // Check if the click might have been on the gizmo even if not dragging
-        // (e.g., clicking to change mode). If hovered, don't deselect.
-        if (!controls?.hovered) {
-             objectManager.deselectInstance();
-        }
-    }
-});
-
+// REMOVED: Global mouse listeners for selection/deselection.
+// This logic is now handled within ObjectManager.js
+/*
+window.addEventListener('mousedown', (e) => { ... });
+window.addEventListener('mousemove', (e) => { ... });
+window.addEventListener('mouseup', (e) => { ... });
+*/
 
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -431,5 +371,5 @@ function animate(timestamp) {
 // --- Initialization ---
 objectManager.addInstance('grid'); // Add the initial grid
 // objectManager.addInstance('pointcloud'); // Optionally add a point cloud initially
-objectManager.setupTransformControls(camera, renderer.domElement, orbitControls); // Setup controls *after* first instance exists
+objectManager.setupTransformControls(camera, renderer, orbitControls); // Setup controls *after* first instance exists
 animate(0); // Start the animation loop
