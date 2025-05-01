@@ -497,8 +497,10 @@ export class ObjectManager {
         this.scene.add(this.transformControls);
         console.log("[ObjectManager] Transform controls object added to scene.");
 
-        // DO NOT add the helper separately. The main object IS the helper/gizmo.
-        // this.scene.add(this.transformControls.getHelper()); // REMOVED
+        // Explicitly add the helper object to the scene as requested
+        this.scene.add(this.transformControls.getHelper());
+        console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
+
 
         // Select the first instance if available after setup
         if (this.instances.length > 0) {
@@ -760,11 +762,12 @@ export class ObjectManager {
     dispose() {
         console.log("Disposing ObjectManager...");
         if (this.transformControls) {
-            // Remove helper first if it was added separately - NO LONGER NEEDED
-            // const helper = this.transformControls.getHelper();
-            // if (helper && helper.parent) {
-            //      this.scene.remove(helper);
-            // }
+            // Remove helper first if it was added separately
+            const helper = this.transformControls.getHelper();
+            if (helper && helper.parent) {
+                 this.scene.remove(helper);
+                 console.log("[ObjectManager] Transform controls helper removed from scene.");
+            }
             this.transformControls.dispose();
             // Remove the main control object from the scene
             if (this.transformControls.parent) { // Check if main control object is in scene
