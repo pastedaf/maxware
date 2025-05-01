@@ -252,7 +252,7 @@ instanceManagement.open();
 // --- Event Listeners ---
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
-let isDragging = false; // Used for mouse interaction logic
+let isDraggingObject = false; // Flag specifically for dragging the transform controls gizmo
 
 // Hidden Audio File Input Listener
 document.getElementById('audioInput').addEventListener('change', async (e) => {
@@ -305,7 +305,10 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 window.addEventListener('mousedown', (e) => {
     if (e.target.closest('.dg')) return; // Prevent interaction if clicking on GUI
 
-    isDragging = true; // Assume dragging starts
+    // Check if the click is on the transform controls gizmo
+    // Note: TransformControls handles its own internal raycasting for the gizmo.
+    // We rely on the 'dragging-changed' event to know if interaction with the gizmo started.
+    // So, here we primarily focus on selecting the underlying objects.
 
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -315,40 +318,49 @@ window.addEventListener('mousedown', (e) => {
     const intersects = raycaster.intersectObjects(intersectableObjects);
 
     if (intersects.length > 0) {
-        // Don't select if transform controls are being dragged
+        // If the click hits an object AND the transform controls are NOT currently being dragged, select the object.
+        // This prevents re-selecting the same object if you click on it while the gizmo is active.
         if (!objectManager.transformControls || !objectManager.transformControls.dragging) {
              objectManager.selectInstance(intersects[0].object); // Use objectManager
         }
     }
-    // Dragging state for orbit controls is handled by transform controls listener
+    // If the click doesn't hit any managed object, we don't deselect here.
+    // Deselection might happen implicitly if the user clicks the gizmo (handled by TransformControls)
+    // or could be added explicitly (e.g., click empty space to deselect).
 });
 
 window.addEventListener('mousemove', (e) => {
-    if (objectManager.transformControls?.dragging) { // Use objectManager
-        isDragging = true;
+    // Update the dragging flag based on transform controls state
+    isDraggingObject = objectManager.transformControls?.dragging ?? false;
+
+    if (isDraggingObject) {
+        // If dragging the object with transform controls, do nothing else here.
+        // OrbitControls are disabled via the 'dragging-changed' listener.
         return;
     }
-    if (isDragging && orbitControls.enabled) {
-         // Standard orbit controls drag
-    } else if (!isDragging && objectManager.currentInstance) { // Use objectManager
-        // Hover effect - only poke grids
-        if (objectManager.currentInstance.userData.settings.type === 'grid') {
-            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
-            raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObject(objectManager.currentInstance); // Use objectManager
+    // If not dragging the object, check for hover effects (like poking the grid)
+    if (objectManager.currentInstance && objectManager.currentInstance.userData.settings.type === 'grid') {
+        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
-            if (intersects.length > 0) {
-                const localPoint = objectManager.currentInstance.worldToLocal(intersects[0].point.clone());
-                pokeGrid(objectManager.currentInstance, localPoint); // Call pokeGrid
-            }
+        raycaster.setFromCamera(mouse, camera);
+        // Only intersect with the currently selected grid for poking
+        const intersects = raycaster.intersectObject(objectManager.currentInstance);
+
+        if (intersects.length > 0) {
+            // Convert intersection point to the grid's local coordinates
+            const localPoint = objectManager.currentInstance.worldToLocal(intersects[0].point.clone());
+            pokeGrid(objectManager.currentInstance, localPoint); // Call pokeGrid
         }
     }
+    // Note: Standard orbit controls dragging happens automatically if orbitControls.enabled is true
+    // and the mouse event is not intercepted by the transform controls or the GUI.
 });
 
 window.addEventListener('mouseup', () => {
-    isDragging = false;
+    // Reset the dragging flag if needed (though 'dragging-changed' is more reliable)
+    // isDraggingObject = false;
 });
 
 
@@ -381,16 +393,21 @@ function pokeGrid(grid, point) {
     const maxPokeHeight = settings.heightScale * 1.5;
 
     for (let i = 0; i < targetHeights.length; i++) {
-        const x = (i % verticesPerSide) * (size / segments) - halfSize;
-        const y = Math.floor(i / verticesPerSide) * (size / segments) - halfSize;
+        // Calculate vertex's original X, Y position on the plane
+        // Note: Assuming grid is oriented with rotation.x = -PI/2, so local X/Y correspond to world X/Z
+        const vertexIndex = i * 3;
+        const x = vertices[vertexIndex];     // Local X
+        const y = vertices[vertexIndex + 1]; // Local Y (which is world Z due to rotation)
 
+        // Compare with the intersection point's local X and Y
         const dx = x - point.x;
-        const dy = y - point.y;
+        const dy = y - point.y; // Compare local Y of vertex with local Y of intersection point
         const distance = Math.sqrt(dx * dx + dy * dy);
 
         if (distance < modificationRadius) {
             const falloff = 1 - (distance / modificationRadius);
             const strength = falloff * pokeStrength;
+            // Increase target height (which affects local Z, world Y)
             targetHeights[i] = Math.min(targetHeights[i] + strength, maxPokeHeight);
         }
     }
