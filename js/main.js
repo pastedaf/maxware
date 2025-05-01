@@ -36,18 +36,23 @@ orbitControls.autoRotate = false;
 orbitControls.autoRotateSpeed = 1.0;
 
 // --- GUI ---
-const gui = new dat.GUI();
-gui.width = 300; // Make GUI slightly wider
+const gui = new dat.GUI({ autoPlace: false }); // Disable autoPlace
+gui.width = 350; // Make GUI slightly wider for more controls
+const guiContainer = document.getElementById('gui-container');
+guiContainer.appendChild(gui.domElement); // Place GUI in our container
 
 // --- Managers ---
 const audioManager = new AudioManager();
 const cameraManager = new CameraManager(VIDEO_ELEMENT_ID);
 const objectManager = new ObjectManager(scene, gui, GRID_SIZE, GRID_SEGMENTS); // Instantiate ObjectManager
 const cameraVisualizer = new CameraVisualizer(scene, cameraManager, {
-    widthSegments: 128,
+    widthSegments: 128, // Higher resolution visualizer
     heightSegments: 96,
-    visible: false,
-    colorMode: 'brightness' // Initial color mode
+    visible: false, // Start hidden
+    colorMode: 'brightness', // Initial color mode
+    position: new THREE.Vector3(0, 5, -10), // Example initial position
+    rotation: new THREE.Euler(0, 0, 0),
+    scale: new THREE.Vector3(1, 1, 1),
 });
 
 // --- Post Processing ---
@@ -141,27 +146,66 @@ const cameraSettings = {
     },
     lastVideoFileLoaded: '',
     cameraMotionEnabled: false,
-    cameraVisualizationEnabled: false,
-    visualizationDepthScale: cameraVisualizer.options.depthScale,
-    visualizationParticleSize: cameraVisualizer.options.particleSize,
-    visualizationColorMode: cameraVisualizer.options.colorMode,
+    // --- Camera Visualization Settings (Moved to separate folder/tab) ---
+    // cameraVisualizationEnabled: false, // This will now be controlled in the visualizer tab
+    // visualizationDepthScale: cameraVisualizer.options.depthScale,
+    // visualizationParticleSize: cameraVisualizer.options.particleSize,
+    // visualizationColorMode: cameraVisualizer.options.colorMode,
 };
-
 
 // --- GUI Setup ---
 
+// --- Tab Management ---
+const guiTabsContainer = document.getElementById('gui-tabs');
+const guiFolders = {}; // Store references to folders
+let activeTab = null;
+
+function addTab(name, folder) {
+    const button = document.createElement('button');
+    button.textContent = name;
+    button.addEventListener('click', () => switchTab(name));
+    guiTabsContainer.appendChild(button);
+    guiFolders[name] = { button, folder };
+    // Hide folder initially
+    folder.close(); // Close folder visually in dat.gui
+    folder.domElement.style.display = 'none'; // Hide folder element
+}
+
+function switchTab(name) {
+    if (activeTab === name) return; // Already active
+
+    for (const tabName in guiFolders) {
+        const tabData = guiFolders[tabName];
+        const isTarget = tabName === name;
+        tabData.folder.domElement.style.display = isTarget ? 'block' : 'none';
+        tabData.button.classList.toggle('active', isTarget);
+        if (isTarget) {
+            tabData.folder.open(); // Open the target folder visually
+        } else {
+            tabData.folder.close(); // Close others
+        }
+    }
+    activeTab = name;
+    // console.log(`Switched to tab: ${name}`);
+}
+// --- End Tab Management ---
+
+
+// --- Create GUI Folders ---
+
 // Global Settings Folder
 const globalFolder = gui.addFolder('Global Settings');
+guiFolders['Global'] = { folder: globalFolder }; // Register folder (button added later)
 globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
 globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
     .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
 globalFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate"); // Renamed for clarity
 globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val); // Renamed for clarity
-// globalFolder.open();
 
 // Audio & Camera Folder
 const audioCameraFolder = gui.addFolder('Audio & Camera');
+guiFolders['Sources'] = { folder: audioCameraFolder }; // Register folder
 // --- Audio Source Controls ---
 const audioSourceController = audioCameraFolder.add(audioSettings, 'source', ['None', 'Audio File', 'Microphone']).name('Audio Source');
 const audioFileButtonController = audioCameraFolder.add(audioSettings, 'triggerAudioFileInput').name('Load Audio File');
@@ -183,22 +227,32 @@ videoFileButtonController.domElement.style.display = cameraSettings.source === '
 cameraSourceController.onChange(async (value) => {
     videoFileButtonController.domElement.style.display = value === 'Video File' ? 'block' : 'none';
     if (cameraManager.isInitialized && cameraManager.sourceType !== value.toLowerCase()) { cameraManager.resetSource(); }
+
+    let success = false;
     if (value === 'Webcam') {
-        const success = await cameraManager.initCamera();
+        success = await cameraManager.initCamera();
         if (!success) { cameraSettings.source = 'None'; cameraSourceController.updateDisplay(); }
-        else if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) { cameraManager.start(); }
-    } else if (value === 'Video File') { cameraSettings.triggerVideoFileInput(); }
-    else { // value === 'None'
+    } else if (value === 'Video File') {
+        cameraSettings.triggerVideoFileInput(); // Loading handled by input listener
+        // Success determined later
+    } else { // value === 'None'
         cameraManager.resetSource();
+        // Disable dependent features if source is None
         if (cameraSettings.cameraMotionEnabled) {
             cameraSettings.cameraMotionEnabled = false;
-            audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); });
+            audioCameraFolder.__controllers.find(c => c.property === 'cameraMotionEnabled')?.updateDisplay();
         }
-        if (cameraSettings.cameraVisualizationEnabled) {
-            cameraSettings.cameraVisualizationEnabled = false;
+        // Also disable visualizer if source is None
+        const visualizerPoints = cameraVisualizer.getPointsObject();
+        if (visualizerPoints && visualizerPoints.visible) {
             cameraVisualizer.setVisible(false);
-            audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); });
+            visualizerFolder.__controllers.find(c => c.property === 'enableVisualizer')?.setValue(false);
         }
+    }
+
+    // Start camera if needed AFTER initialization/loading attempt
+    if (success && (cameraSettings.cameraMotionEnabled || (cameraVisualizer.getPointsObject()?.visible))) {
+        cameraManager.start();
     }
 });
 // --- Camera Interaction Controls ---
@@ -208,38 +262,153 @@ audioCameraFolder.add(cameraSettings, 'cameraMotionEnabled').name('Enable Motion
             if (cameraSettings.source === 'Webcam') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'webcam') {
                     const success = await cameraManager.initCamera();
-                    if (!success) { cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); }); return; }
+                    if (!success) { cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.find(c => c.property === 'cameraMotionEnabled')?.updateDisplay(); return; }
                 } cameraManager.start();
             } else if (cameraSettings.source === 'Video File') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'video') {
-                    alert("Please load a video file first."); cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); }); return;
+                    alert("Please load a video file first."); cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.find(c => c.property === 'cameraMotionEnabled')?.updateDisplay(); return;
                 } cameraManager.start();
-            } else { alert("Please select a Camera Source first."); cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraMotionEnabled') c.updateDisplay(); }); return; }
-        } else { if (!cameraSettings.cameraVisualizationEnabled) { cameraManager.stop(); } }
+            } else { alert("Please select a Camera Source first."); cameraSettings.cameraMotionEnabled = false; audioCameraFolder.__controllers.find(c => c.property === 'cameraMotionEnabled')?.updateDisplay(); return; }
+        } else {
+            // Stop camera only if visualizer is also not enabled
+            const visualizerPoints = cameraVisualizer.getPointsObject();
+            if (!visualizerPoints || !visualizerPoints.visible) {
+                 cameraManager.stop();
+            }
+        }
     });
-audioCameraFolder.add(cameraSettings, 'cameraVisualizationEnabled').name('Enable Visualization')
+
+// Camera Visualizer Folder
+const visualizerFolder = gui.addFolder('Camera Visualizer');
+guiFolders['Visualizer'] = { folder: visualizerFolder }; // Register folder
+const visualizerSettings = {
+    enableVisualizer: cameraVisualizer.options.visible,
+    // Proxy objects/values for GUI control linking
+    position: { x: cameraVisualizer.options.position.x, y: cameraVisualizer.options.position.y, z: cameraVisualizer.options.position.z },
+    rotation: { x: THREE.MathUtils.radToDeg(cameraVisualizer.options.rotation.x), y: THREE.MathUtils.radToDeg(cameraVisualizer.options.rotation.y), z: THREE.MathUtils.radToDeg(cameraVisualizer.options.rotation.z) },
+    scale: { x: cameraVisualizer.options.scale.x, y: cameraVisualizer.options.scale.y, z: cameraVisualizer.options.scale.z },
+    particleSize: cameraVisualizer.options.particleSize,
+    depthScale: cameraVisualizer.options.depthScale,
+    colorMode: cameraVisualizer.options.colorMode,
+};
+
+// Enable/Disable Toggle
+visualizerFolder.add(visualizerSettings, 'enableVisualizer').name('Enable Visualization')
     .onChange(async (enabled) => {
         if (enabled) {
+            // Check for source first
+            if (cameraSettings.source === 'None') {
+                alert("Please select a Camera Source first.");
+                visualizerSettings.enableVisualizer = false;
+                visualizerFolder.__controllers.find(c => c.property === 'enableVisualizer')?.updateDisplay();
+                return;
+            }
+            // Ensure source is ready (init if webcam, check if video loaded)
             if (cameraSettings.source === 'Webcam') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'webcam') {
                     const success = await cameraManager.initCamera();
-                    if (!success) { cameraSettings.cameraVisualizationEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); }); return; }
-                } cameraManager.start(); cameraVisualizer.setVisible(true);
+                    if (!success) { visualizerSettings.enableVisualizer = false; visualizerFolder.__controllers.find(c => c.property === 'enableVisualizer')?.updateDisplay(); return; }
+                }
             } else if (cameraSettings.source === 'Video File') {
                 if (!cameraManager.isInitialized || cameraManager.sourceType !== 'video') {
-                    alert("Please load a video file first."); cameraSettings.cameraVisualizationEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); }); return;
-                } cameraManager.start(); cameraVisualizer.setVisible(true);
-            } else { alert("Please select a Camera Source first."); cameraSettings.cameraVisualizationEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); }); return; }
-        } else { cameraVisualizer.setVisible(false); if (!cameraSettings.cameraMotionEnabled) { cameraManager.stop(); } }
+                    alert("Please load a video file first."); visualizerSettings.enableVisualizer = false; visualizerFolder.__controllers.find(c => c.property === 'enableVisualizer')?.updateDisplay(); return;
+                }
+            }
+            // Initialize visualizer if needed, then set visible and start camera
+            if (!cameraVisualizer.isInitialized) {
+                cameraVisualizer.init();
+                // Re-add transform controls if init was deferred
+                addVisualizerTransformControls();
+            }
+            cameraVisualizer.setVisible(true);
+            cameraManager.start(); // Start camera processing if not already running
+            setVisualizerControlsState(true); // Enable controls
+
+        } else {
+            cameraVisualizer.setVisible(false);
+            setVisualizerControlsState(false); // Disable controls
+            // Stop camera only if motion influence is also disabled
+            if (!cameraSettings.cameraMotionEnabled) {
+                cameraManager.stop();
+            }
+        }
     });
-// --- Camera Visualizer Controls ---
-audioCameraFolder.add(cameraSettings, 'visualizationColorMode', ['brightness', 'color']).name('Vis Color Mode').onChange(val => cameraVisualizer.setColorMode(val));
-audioCameraFolder.add(cameraSettings, 'visualizationDepthScale', 1, 20).name('Vis Depth Scale').onChange(val => cameraVisualizer.setDepthScale(val));
-audioCameraFolder.add(cameraSettings, 'visualizationParticleSize', 0.01, 0.5).name('Vis Particle Size').onChange(val => cameraVisualizer.setParticleSize(val));
-audioCameraFolder.open();
+
+// --- Add Transform Controls (conditionally) ---
+let visualizerControls = []; // Store controllers to enable/disable
+function addVisualizerTransformControls() {
+    const points = cameraVisualizer.getPointsObject();
+    if (!points) return; // Don't add if points object doesn't exist yet
+
+    // Clear previous controls if re-adding
+    visualizerControls.forEach(c => {
+        try { visualizerFolder.remove(c); } catch (e) { /* ignore */ }
+    });
+    visualizerControls = [];
+
+    // Position
+    const posFolder = visualizerFolder.addFolder('Position');
+    visualizerControls.push(posFolder.add(visualizerSettings.position, 'x', -50, 50).step(0.1).onChange(v => points.position.x = v));
+    visualizerControls.push(posFolder.add(visualizerSettings.position, 'y', -50, 50).step(0.1).onChange(v => points.position.y = v));
+    visualizerControls.push(posFolder.add(visualizerSettings.position, 'z', -50, 50).step(0.1).onChange(v => points.position.z = v));
+    visualizerControls.push(posFolder); // Add folder itself to list for enable/disable
+
+    // Rotation (Degrees)
+    const rotFolder = visualizerFolder.addFolder('Rotation (Degrees)');
+    visualizerControls.push(rotFolder.add(visualizerSettings.rotation, 'x', -180, 180).step(1).onChange(v => points.rotation.x = THREE.MathUtils.degToRad(v)));
+    visualizerControls.push(rotFolder.add(visualizerSettings.rotation, 'y', -180, 180).step(1).onChange(v => points.rotation.y = THREE.MathUtils.degToRad(v)));
+    visualizerControls.push(rotFolder.add(visualizerSettings.rotation, 'z', -180, 180).step(1).onChange(v => points.rotation.z = THREE.MathUtils.degToRad(v)));
+    visualizerControls.push(rotFolder);
+
+    // Scale
+    const scaleFolder = visualizerFolder.addFolder('Scale');
+    visualizerControls.push(scaleFolder.add(visualizerSettings.scale, 'x', 0.1, 10).step(0.1).onChange(v => points.scale.x = v));
+    visualizerControls.push(scaleFolder.add(visualizerSettings.scale, 'y', 0.1, 10).step(0.1).onChange(v => points.scale.y = v));
+    visualizerControls.push(scaleFolder.add(visualizerSettings.scale, 'z', 0.1, 10).step(0.1).onChange(v => points.scale.z = v));
+    visualizerControls.push(scaleFolder);
+
+    // Other Visualizer Controls
+    visualizerControls.push(visualizerFolder.add(visualizerSettings, 'colorMode', ['brightness', 'color']).name('Color Mode').onChange(val => cameraVisualizer.setColorMode(val)));
+    visualizerControls.push(visualizerFolder.add(visualizerSettings, 'depthScale', 1, 20).name('Depth Scale').onChange(val => cameraVisualizer.setDepthScale(val)));
+    visualizerControls.push(visualizerFolder.add(visualizerSettings, 'particleSize', 0.01, 0.5).name('Particle Size').onChange(val => cameraVisualizer.setParticleSize(val)));
+
+    // Set initial state based on whether visualizer is enabled
+    setVisualizerControlsState(visualizerSettings.enableVisualizer);
+}
+
+// Helper to enable/disable visualizer controls
+function setVisualizerControlsState(enabled) {
+    visualizerControls.forEach(controlOrFolder => {
+        // Check if it's a folder or a controller
+        if (controlOrFolder instanceof dat.GUI) { // It's a folder
+             controlOrFolder.__controllers.forEach(controller => {
+                 controller.domElement.style.pointerEvents = enabled ? 'auto' : 'none';
+                 controller.domElement.style.opacity = enabled ? 1.0 : 0.5;
+             });
+             // Also toggle folder open/close state visually
+             if (enabled) controlOrFolder.open(); else controlOrFolder.close();
+        } else { // It's a controller
+            controlOrFolder.domElement.style.pointerEvents = enabled ? 'auto' : 'none';
+            controlOrFolder.domElement.style.opacity = enabled ? 1.0 : 0.5;
+        }
+    });
+}
+
+// Add controls only if visualizer was initialized immediately (visible: true)
+// Otherwise, add them when it's enabled via the toggle.
+if (cameraVisualizer.isInitialized) {
+    addVisualizerTransformControls();
+} else {
+    // Add placeholders or leave empty until enabled?
+    // Let's add them but keep them disabled initially.
+    addVisualizerTransformControls();
+    setVisualizerControlsState(false);
+}
+
 
 // Post Processing Folder
 const ppFolder = gui.addFolder('Post Processing');
+guiFolders['Effects'] = { folder: ppFolder }; // Register folder
 ppFolder.add(settings, 'pixelateEnabled').name("Pixelate").onChange(val => pixelatePass.enabled = val);
 ppFolder.add(settings, 'pixelSize', 1, 32).step(1).onChange(val => pixelatePass.uniforms.pixelSize.value = val);
 ppFolder.add(settings, 'fxaaEnabled').name("FXAA").onChange(val => fxaaPass.enabled = val);
@@ -247,17 +416,30 @@ ppFolder.add(settings, 'bloomEnabled').name("Bloom").onChange(val => bloomPass.e
 ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength = val);
 ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
 ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
-// ppFolder.open();
 
 // Instance Management Folder
-const instanceManagement = gui.addFolder('Instance Management');
+const instanceManagement = gui.addFolder('Instances');
+guiFolders['Instances'] = { folder: instanceManagement }; // Register folder
 instanceManagement.add(settings, 'addGrid').name("Add Grid");
 instanceManagement.add(settings, 'addPointCloud').name("Add Point Cloud");
 instanceManagement.add(settings, 'addSphere').name("Add Sphere");
 instanceManagement.add(settings, 'addTorus').name("Add Torus");
 instanceManagement.add(settings, 'addTorusKnot').name("Add Torus Knot");
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
-instanceManagement.open();
+
+
+// --- Finalize Tab Setup ---
+// Add buttons for registered folders
+addTab('Global', globalFolder);
+addTab('Sources', audioCameraFolder);
+addTab('Visualizer', visualizerFolder); // Add Visualizer tab
+addTab('Effects', ppFolder);
+addTab('Instances', instanceManagement); // Keep instance management separate
+
+// Activate the first tab initially
+switchTab('Global');
+// --- End GUI Setup ---
+
 
 // --- Event Listeners ---
 
@@ -294,7 +476,11 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
                 if (cameraSettings.source !== 'Video File') {
                     cameraSettings.source = 'Video File'; cameraSourceController.updateDisplay(); videoFileButtonController.domElement.style.display = 'block';
                 }
-                if (cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) { cameraManager.start(); }
+                // Start camera if motion or visualization is enabled
+                const visualizerEnabled = visualizerSettings.enableVisualizer;
+                if (cameraSettings.cameraMotionEnabled || visualizerEnabled) {
+                     cameraManager.start();
+                }
             } else { throw new Error("CameraManager failed to load video."); }
         } catch (error) {
             console.error("Failed to load or start video:", error); alert(`Failed to load video: ${error.message}`);
@@ -333,8 +519,9 @@ function animate(timestamp) {
 
     // --- Get Motion Score ---
     let motionScore = 0;
+    const visualizerEnabled = visualizerSettings.enableVisualizer;
     // Process frame if either motion influence or visualization is enabled AND camera is running
-    if ((cameraSettings.cameraMotionEnabled || cameraSettings.cameraVisualizationEnabled) && cameraManager.isRunning) {
+    if ((cameraSettings.cameraMotionEnabled || visualizerEnabled) && cameraManager.isRunning) {
         // processFrame updates the score internally and prepares data for visualizer
         cameraManager.processFrame();
         motionScore = cameraManager.lastMotionScore; // Get the updated score
@@ -342,12 +529,10 @@ function animate(timestamp) {
 
     // --- Update Camera Visualization ---
     // Update visualizer if it's enabled AND camera is running
-    if (cameraSettings.cameraVisualizationEnabled && cameraManager.isRunning) {
+    if (visualizerEnabled && cameraManager.isRunning) {
         cameraVisualizer.update(); // Update particle positions/colors using the frame processed above
-    } else if (cameraVisualizer.points && cameraVisualizer.points.visible) {
-        // Ensure visualizer is hidden if it shouldn't be running
-        cameraVisualizer.setVisible(false);
     }
+    // Note: Visibility of the points object itself is handled within CameraVisualizer.update/setVisible
 
 
     // --- Global Effects (Camera FOV) ---

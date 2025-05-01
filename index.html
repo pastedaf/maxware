@@ -11,19 +11,62 @@
             overflow: hidden;
             height: 100%;
             background-color: #111; /* Match scene background */
+            font-family: sans-serif; /* Basic font */
         }
         #gridCanvas {
             width: 100%;
             height: 100%;
             display: block;
         }
+
+        /* GUI Container and Tabs */
+        #gui-container {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 10; /* Ensure GUI is above canvas */
+        }
+
+        #gui-tabs {
+            display: flex;
+            margin-bottom: 5px; /* Space between tabs and GUI */
+        }
+
+        #gui-tabs button {
+            padding: 8px 12px;
+            margin-right: 3px;
+            border: 1px solid #555;
+            background-color: #333;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 12px;
+            border-bottom: none; /* Remove bottom border for tab look */
+            border-radius: 3px 3px 0 0; /* Rounded top corners */
+        }
+
+        #gui-tabs button.active {
+            background-color: #444; /* Slightly lighter for active tab */
+            color: #fff;
+            border-bottom: 1px solid #444; /* Match background */
+            position: relative;
+            top: 1px; /* Align with GUI top border */
+        }
+
+        #gui-tabs button:hover {
+            background-color: #4a4a4a;
+        }
+
         /* Style dat.gui */
         .dg.main {
-             /* Position GUI top-right */
-             top: 10px !important;
-             right: 10px !important;
+             /* Position relative within the container */
+             position: relative !important;
+             top: auto !important;
+             right: auto !important;
              left: auto !important;
+             float: none !important; /* Override default float if any */
+             /* Ensure folders are hidden initially by JS */
         }
+
         /* Hide the actual file inputs visually */
         #audioInput, #videoInput {
             width: 0.1px;
@@ -44,6 +87,15 @@
     <input type="file" id="videoInput" accept="video/*"> <!-- Added video input -->
 
     <canvas id="gridCanvas"></canvas>
+
+    <!-- Container for GUI and Tabs -->
+    <div id="gui-container">
+        <div id="gui-tabs">
+            <!-- Tabs will be added here by main.js -->
+        </div>
+        <!-- dat.GUI will attach itself here or nearby -->
+    </div>
+
 
     <!-- Load main script as module -->
     <script type="module" src="js/main.js"></script>

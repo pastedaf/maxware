@@ -14,6 +14,10 @@ export class CameraVisualizer {
             visualScale: options.visualScale || 15, // Size of the particle plane in the scene
             visible: options.visible || false,
             colorMode: options.colorMode || 'brightness', // 'brightness' or 'color'
+            // Add transform defaults
+            position: options.position || new THREE.Vector3(0, 0, -5), // Default position slightly back
+            rotation: options.rotation || new THREE.Euler(0, 0, 0),
+            scale: options.scale || new THREE.Vector3(1, 1, 1),
         };
 
         this.geometry = null;
@@ -35,9 +39,12 @@ export class CameraVisualizer {
         const colors = new Float32Array(numParticles * 3);
 
         const aspectRatio = this.options.widthSegments / this.options.heightSegments;
+        // Adjust plane height based on aspect ratio to maintain proportions
+        const planeWidth = this.options.visualScale;
         const planeHeight = this.options.visualScale / aspectRatio;
-        const halfWidth = this.options.visualScale / 2;
+        const halfWidth = planeWidth / 2;
         const halfHeight = planeHeight / 2;
+
 
         let k = 0;
         for (let i = 0; i < this.options.widthSegments; i++) {
@@ -45,9 +52,10 @@ export class CameraVisualizer {
                 const u = i / (this.options.widthSegments - 1); // Normalized 0-1
                 const v = j / (this.options.heightSegments - 1); // Normalized 0-1
 
-                const x = u * this.options.visualScale - halfWidth;
+                // Place particles on XY plane relative to the object's origin
+                const x = u * planeWidth - halfWidth;
                 const y = v * planeHeight - halfHeight; // Use Y for vertical position on the plane
-                const z = 0; // Initial Z depth
+                const z = 0; // Initial Z depth relative to object origin
 
                 positions[k * 3] = x;
                 positions[k * 3 + 1] = y;
@@ -75,13 +83,22 @@ export class CameraVisualizer {
         });
 
         this.points = new THREE.Points(this.geometry, this.material);
+
+        // Apply initial transform from options
+        this.points.position.copy(this.options.position);
+        this.points.rotation.copy(this.options.rotation);
+        this.points.scale.copy(this.options.scale);
+
         this.points.visible = this.options.visible;
-        // Optional: Rotate if needed to face the camera or align with grids
-        // this.points.rotation.x = -Math.PI / 2; // Example: Lay flat on XZ plane
 
         this.scene.add(this.points);
         this.isInitialized = true;
         console.log("CameraVisualizer initialized.");
+    }
+
+    // Helper method to safely get the points object
+    getPointsObject() {
+        return this.points;
     }
 
     update() {
@@ -115,7 +132,14 @@ export class CameraVisualizer {
         const videoHeight = canvas.height;
 
         // Get image data (already drawn in CameraManager.processFrame)
-        const imageData = ctx.getImageData(0, 0, videoWidth, videoHeight);
+        let imageData;
+        try {
+             imageData = ctx.getImageData(0, 0, videoWidth, videoHeight);
+        } catch (e) {
+             console.warn("CameraVisualizer: Failed to getImageData (canvas might be tainted or size 0).", e);
+             if (this.points) this.points.visible = false; // Hide if we can't get data
+             return;
+        }
         const data = imageData.data;
 
         const positions = this.geometry.attributes.position.array;
@@ -127,13 +151,18 @@ export class CameraVisualizer {
                 // Map particle grid coordinates (u, v) to video texture coordinates
                 const u = i / (this.options.widthSegments - 1);
                 // Flip V for image coords (0,0 is top-left in canvas, but often bottom-left in textures)
-                // Let's keep particle Y increasing upwards, so sample image Y downwards.
+                // Particle Y increases upwards, so sample image Y downwards.
                 const v = 1.0 - (j / (this.options.heightSegments - 1));
 
                 // Calculate corresponding pixel index in the ImageData
                 const sampleX = Math.floor(u * (videoWidth - 1));
                 const sampleY = Math.floor(v * (videoHeight - 1));
                 const pixelIndex = (sampleY * videoWidth + sampleX) * 4; // 4 components (R, G, B, A)
+
+                // Check bounds for safety
+                if (pixelIndex < 0 || pixelIndex + 3 >= data.length) {
+                    continue; // Skip if index is out of bounds
+                }
 
                 // Sample color components
                 const r = data[pixelIndex] / 255.0;     // Normalize to 0-1
@@ -143,7 +172,8 @@ export class CameraVisualizer {
                 // Calculate brightness (average of R, G, B)
                 const brightness = (r + g + b) / 3;
 
-                // Update Z position based on brightness (always, regardless of color mode)
+                // Update Z position based on brightness (relative to particle plane)
+                // We access the array directly for performance
                 positions[k * 3 + 2] = brightness * this.options.depthScale;
 
                 // Update color based on selected mode
@@ -169,19 +199,50 @@ export class CameraVisualizer {
         this.options.visible = visible;
         if (visible && !this.isInitialized) {
             this.init(); // Initialize if set visible for the first time
-        } else if (this.points) {
-            // Visibility will be handled by the update loop based on conditions
-            // this.points.visible = visible; // Let update() manage visibility based on readiness
         }
+        // Visibility of the points object itself is handled by the update loop
+        // based on whether it *can* update.
+        // We just need to ensure init() is called if needed.
+
          // If turning visible, trigger an immediate update if possible (conditions allowing)
          if (visible && this.isInitialized) {
              this.update();
+         } else if (!visible && this.points) {
+             // Explicitly hide if set to invisible
+             this.points.visible = false;
          }
     }
 
     setDepthScale(scale) {
         this.options.depthScale = scale;
+        // Store in options as well if needed for persistence/reset
+        if (this.points) this.options.position.copy(this.points.position);
     }
+
+    setPosition(x, y, z) {
+        if (this.points) {
+            this.points.position.set(x, y, z);
+            // Store in options as well if needed for persistence/reset
+            this.options.position.copy(this.points.position);
+        }
+    }
+
+    setRotation(xRad, yRad, zRad) {
+        if (this.points) {
+            this.points.rotation.set(xRad, yRad, zRad);
+             // Store in options as well if needed for persistence/reset
+            this.options.rotation.copy(this.points.rotation);
+        }
+    }
+
+    setScale(x, y, z) {
+        if (this.points) {
+            this.points.scale.set(x, y, z);
+             // Store in options as well if needed for persistence/reset
+            this.options.scale.copy(this.points.scale);
+        }
+    }
+
 
      setParticleSize(size) {
          this.options.particleSize = size;
@@ -195,7 +256,7 @@ export class CameraVisualizer {
          if (mode === 'brightness' || mode === 'color') {
              this.options.colorMode = mode;
              // Trigger an update to reflect the change immediately if visible
-             if (this.options.visible) {
+             if (this.options.visible && this.isInitialized) {
                  this.update();
              }
          } else {
@@ -215,6 +276,7 @@ export class CameraVisualizer {
         if (this.material) {
             this.material.dispose();
         }
+        this.points = null; // Clear reference
         this.isInitialized = false;
         console.log("CameraVisualizer disposed.");
     }
