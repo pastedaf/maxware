@@ -7,36 +7,72 @@ const defaultSettings = {
     grid: {
         type: 'grid',
         audioInfluence: 1.0,
-        // decayRate: 0.98, // Removed - related to poke effect
         heightScale: 3,
         colorMapping: 'height', // 'height', 'audio', 'combined', 'frequencyBands'
-        wavePattern: 'radial', // 'radial', 'linear', 'random', 'sineWave', 'checkerboard'
+        wavePattern: 'radial', // 'radial', 'linear', 'random', 'sineWave', 'checkerboard', 'ripple'
         frequencyRange: 'mid', // 'low', 'mid', 'high'
         visible: true,
         wireframe: false,
         motionInfluenceFactor: 0.5,
-        // pokeStrength: 0.2, // Removed
-        // pokeRadius: 1.5, // Removed
         lowColor: new THREE.Color(0x003300),
         midColor: new THREE.Color(0x00ff00),
         highColor: new THREE.Color(0xffffff),
         position: new THREE.Vector3(),
         rotation: new THREE.Euler()
+        // Note: Grid size/segments are constructor params, not instance settings
     },
     pointcloud: {
         type: 'pointcloud',
-        particleCount: 5000,
+        particleCount: 5000, // Note: Changing this requires recreating the object currently
         particleSize: 0.1,
         distribution: 'sphere', // 'sphere', 'cube', 'plane'
         distributionScale: 10, // Size of the sphere/cube/plane
         audioInfluence: 1.0,
         displacementScale: 2.0, // How much audio displaces points
+        displacementMode: 'radial', // 'radial', 'frequencyBandDisplacement'
         colorMapping: 'audio', // 'audio', 'frequencyBands'
-        frequencyRange: 'mid', // 'low', 'mid', 'high'
+        frequencyRange: 'mid', // 'low', 'mid', 'high' (used for 'radial' displacement and 'audio' color)
         visible: true,
-        motionInfluenceFactor: 0.3, // Less influence maybe?
+        motionInfluenceFactor: 0.3,
         lowColor: new THREE.Color(0x0000ff), // Blue
         midColor: new THREE.Color(0x00ffff), // Cyan
+        highColor: new THREE.Color(0xffffff), // White
+        position: new THREE.Vector3(),
+        rotation: new THREE.Euler()
+    },
+    sphere: {
+        type: 'sphere',
+        radius: 5,
+        widthSegments: 32,
+        heightSegments: 16,
+        audioInfluence: 1.0,
+        displacementScale: 1.5,
+        colorMapping: 'audio', // 'audio', 'frequencyBands', 'normal'
+        frequencyRange: 'mid', // 'low', 'mid', 'high'
+        visible: true,
+        wireframe: false,
+        motionInfluenceFactor: 0.4,
+        lowColor: new THREE.Color(0xff8800), // Orange
+        midColor: new THREE.Color(0xffff00), // Yellow
+        highColor: new THREE.Color(0xffffff), // White
+        position: new THREE.Vector3(),
+        rotation: new THREE.Euler()
+    },
+    torus: {
+        type: 'torus',
+        radius: 5,
+        tube: 2,
+        radialSegments: 16,
+        tubularSegments: 32,
+        audioInfluence: 1.0,
+        displacementScale: 1.0,
+        colorMapping: 'audio', // 'audio', 'frequencyBands', 'normal'
+        frequencyRange: 'mid', // 'low', 'mid', 'high'
+        visible: true,
+        wireframe: false,
+        motionInfluenceFactor: 0.4,
+        lowColor: new THREE.Color(0x8800ff), // Purple
+        midColor: new THREE.Color(0xff00ff), // Magenta
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
         rotation: new THREE.Euler()
@@ -48,16 +84,20 @@ export class ObjectManager {
     constructor(scene, gui, gridSize = 15, gridSegments = 63) {
         this.scene = scene;
         this.gui = gui;
-        this.gridSize = gridSize; // Physical size of the grid plane
-        this.gridSegments = gridSegments; // Number of segments (vertices = segments + 1)
+        // Grid defaults (used only for grid template)
+        this.gridSize = gridSize;
+        this.gridSegments = gridSegments;
         this.gridVerticesCount = (this.gridSegments + 1) * (this.gridSegments + 1);
+        // ---
         this.instances = [];
         this.currentInstance = null;
         this.transformControls = null;
         this.orbitControls = null; // Reference to OrbitControls needed for enabling/disabling
         this.templates = {
             grid: this.createGridTemplate(),
-            pointcloud: this.createPointCloudTemplate()
+            pointcloud: this.createPointCloudTemplate(),
+            sphere: this.createSphereTemplate(),
+            torus: this.createTorusTemplate()
         };
         this.instanceCount = 0;
 
@@ -82,7 +122,10 @@ export class ObjectManager {
         const colors = new Float32Array(this.gridVerticesCount * 3);
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         // Keep original Z positions (which are 0 for PlaneGeometry)
-        geometry.userData = { originalZ: new Float32Array(this.gridVerticesCount).fill(0) }; // Simpler init
+        geometry.userData = {
+             originalZ: new Float32Array(this.gridVerticesCount).fill(0),
+             // No initial positions/normals needed for grid as displacement is only Z
+        };
 
         const material = new THREE.MeshPhongMaterial({
             vertexColors: true,
@@ -108,42 +151,7 @@ export class ObjectManager {
         const colors = new Float32Array(settings.particleCount * 3);
         const initialPositions = new Float32Array(settings.particleCount * 3); // Store initial state
 
-        for (let i = 0; i < settings.particleCount; i++) {
-            let x, y, z;
-            switch (settings.distribution) {
-                case 'cube':
-                    x = (Math.random() - 0.5) * settings.distributionScale;
-                    y = (Math.random() - 0.5) * settings.distributionScale;
-                    z = (Math.random() - 0.5) * settings.distributionScale;
-                    break;
-                case 'plane': // XZ plane like the grid
-                     x = (Math.random() - 0.5) * settings.distributionScale;
-                     y = 0;
-                     z = (Math.random() - 0.5) * settings.distributionScale;
-                     break;
-                case 'sphere':
-                default:
-                    const theta = Math.random() * Math.PI * 2;
-                    const phi = Math.acos((Math.random() * 2) - 1);
-                    const radius = Math.random() * settings.distributionScale / 2; // Distribute within the sphere
-                    x = radius * Math.sin(phi) * Math.cos(theta);
-                    y = radius * Math.sin(phi) * Math.sin(theta);
-                    z = radius * Math.cos(phi);
-                    break;
-            }
-            positions[i * 3] = x;
-            positions[i * 3 + 1] = y;
-            positions[i * 3 + 2] = z;
-            // Store initial positions
-            initialPositions[i * 3] = x;
-            initialPositions[i * 3 + 1] = y;
-            initialPositions[i * 3 + 2] = z;
-            // Initial white color
-            colors[i * 3] = 1;
-            colors[i * 3 + 1] = 1;
-            colors[i * 3 + 2] = 1;
-        }
-
+        // Calculate initial positions (will be done properly in resetObjectInitialGeometry)
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geometry.userData = { initialPositions }; // Store for reference
@@ -154,12 +162,76 @@ export class ObjectManager {
             sizeAttenuation: true
         });
 
+        // Populate initial positions based on default settings
+        this.resetObjectInitialGeometry({ geometry, userData: { settings } });
+
         return {
             geometry,
             material,
             defaultSettings: settings
         };
     }
+
+    createSphereTemplate() {
+        const settings = defaultSettings.sphere;
+        const geometry = new THREE.SphereGeometry(settings.radius, settings.widthSegments, settings.heightSegments);
+        const numVertices = geometry.attributes.position.count;
+        const colors = new Float32Array(numVertices * 3);
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // Store initial positions and normals
+        geometry.userData = {
+            initialPositions: new Float32Array(geometry.attributes.position.array),
+            initialNormals: new Float32Array(geometry.attributes.normal.array)
+        };
+
+        const material = new THREE.MeshPhongMaterial({
+            vertexColors: true,
+            wireframe: settings.wireframe,
+            flatShading: true, // Looks interesting on spheres
+            emissive: 0x111111,
+            specular: 0xcccccc,
+            shininess: 50,
+            side: THREE.DoubleSide
+        });
+
+        return {
+            geometry,
+            material,
+            defaultSettings: settings
+        };
+    }
+
+    createTorusTemplate() {
+        const settings = defaultSettings.torus;
+        const geometry = new THREE.TorusGeometry(settings.radius, settings.tube, settings.radialSegments, settings.tubularSegments);
+        const numVertices = geometry.attributes.position.count;
+        const colors = new Float32Array(numVertices * 3);
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // Store initial positions and normals
+        geometry.userData = {
+            initialPositions: new Float32Array(geometry.attributes.position.array),
+            initialNormals: new Float32Array(geometry.attributes.normal.array)
+        };
+
+        const material = new THREE.MeshPhongMaterial({
+            vertexColors: true,
+            wireframe: settings.wireframe,
+            flatShading: true,
+            emissive: 0x110011,
+            specular: 0xcc00cc,
+            shininess: 50,
+            side: THREE.DoubleSide
+        });
+
+        return {
+            geometry,
+            material,
+            defaultSettings: settings
+        };
+    }
+
 
     // --- Instance Management ---
 
@@ -180,13 +252,19 @@ export class ObjectManager {
             geometry.attributes.color = geometry.attributes.color.clone();
             geometry.attributes.color.array = new Float32Array(geometry.attributes.color.array);
         }
-        // Clone userData as well
-        geometry.userData = { ...template.geometry.userData };
-        if (geometry.userData.originalZ) { // For grid
-             geometry.userData.originalZ = new Float32Array(geometry.userData.originalZ);
+        if (geometry.attributes.normal && type !== 'pointcloud') { // Point clouds don't have normals
+             geometry.attributes.normal = geometry.attributes.normal.clone();
+             geometry.attributes.normal.array = new Float32Array(geometry.attributes.normal.array);
         }
-        if (geometry.userData.initialPositions) { // For pointcloud
-             geometry.userData.initialPositions = new Float32Array(geometry.userData.initialPositions);
+
+        // Clone userData deeply for arrays
+        geometry.userData = {};
+        for (const key in template.geometry.userData) {
+            if (template.geometry.userData[key] instanceof Float32Array) {
+                geometry.userData[key] = new Float32Array(template.geometry.userData[key]);
+            } else {
+                geometry.userData[key] = JSON.parse(JSON.stringify(template.geometry.userData[key]));
+            }
         }
 
 
@@ -196,8 +274,13 @@ export class ObjectManager {
             instanceObject.rotation.x = -Math.PI / 2; // Default grid orientation
         } else if (type === 'pointcloud') {
             instanceObject = new THREE.Points(geometry, material);
-            // No default rotation for point cloud
+        } else if (type === 'sphere' || type === 'torus') {
+            instanceObject = new THREE.Mesh(geometry, material);
+        } else {
+             console.error(`Unhandled object type for mesh/points creation: ${type}`);
+             return null;
         }
+
 
         const sourceSettings = baseInstance ? baseInstance.userData.settings : template.defaultSettings;
 
@@ -212,9 +295,10 @@ export class ObjectManager {
         newSettings.type = type; // Ensure type is set
 
         // Apply specific material properties from settings
-        if (type === 'grid') {
+        if (type === 'grid' || type === 'sphere' || type === 'torus') {
             material.wireframe = newSettings.wireframe;
-        } else if (type === 'pointcloud') {
+        }
+        if (type === 'pointcloud') {
             material.size = newSettings.particleSize;
         }
 
@@ -223,12 +307,8 @@ export class ObjectManager {
             guiFolder: null,
             controllers: [] // To keep track of GUI controllers for removal
         };
-        // Add type-specific data if needed
-        // if (type === 'grid') {
-             // instanceObject.userData.targetHeights = new Float32Array(this.gridVerticesCount); // Removed - targetHeights not needed without poke
-        // }
 
-
+        // If cloning, copy transform AFTER setting up userData
         if (baseInstance) {
             instanceObject.position.copy(baseInstance.position);
             instanceObject.rotation.copy(baseInstance.rotation);
@@ -236,6 +316,12 @@ export class ObjectManager {
         // Initialize settings position/rotation from the object's current state
         instanceObject.userData.settings.position.copy(instanceObject.position);
         instanceObject.userData.settings.rotation.copy(instanceObject.rotation);
+
+        // If it's a point cloud, sphere, or torus, ensure its initial geometry matches its settings
+        if (type === 'pointcloud' || type === 'sphere' || type === 'torus') {
+             this.resetObjectInitialGeometry(instanceObject);
+        }
+
 
         this.instanceCount++;
         const folderName = `${type.charAt(0).toUpperCase() + type.slice(1)} ${this.instanceCount}`;
@@ -264,29 +350,50 @@ export class ObjectManager {
             guiFolder.add(settings, 'motionInfluenceFactor', 0, 1).name("Motion Influence").step(0.05)
         );
 
+        if (type === 'grid' || type === 'sphere' || type === 'torus') {
+             const material = instanceObject.material;
+             controllers.push(
+                 guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val)
+             );
+        }
+
         if (type === 'grid') {
-            const material = instanceObject.material;
             controllers.push(
-                guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val),
                 guiFolder.add(settings, 'heightScale', 0.1, 10).name("Height Scale").step(0.1),
-                // guiFolder.add(settings, 'decayRate', 0.9, 0.999).name("Poke Decay").step(0.001), // Removed
-                // guiFolder.add(settings, 'pokeStrength', 0.05, 1.0).name("Poke Strength").step(0.05), // Removed
-                // guiFolder.add(settings, 'pokeRadius', 0.5, 5.0).name("Poke Radius").step(0.1), // Removed
                 guiFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined', 'frequencyBands']).name("Color Mapping"),
-                guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random', 'sineWave', 'checkerboard']).name("Wave Pattern")
+                guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random', 'sineWave', 'checkerboard', 'ripple']).name("Wave Pattern")
             );
         } else if (type === 'pointcloud') {
             const material = instanceObject.material;
              controllers.push(
                 guiFolder.add(settings, 'particleSize', 0.01, 1.0).name("Particle Size").step(0.01).onChange(val => material.size = val),
-                // TODO: Add particleCount control? Requires recreating geometry. Defer for now.
+                // Note: particleCount requires recreating geometry, complex to handle via GUI for now
                 // guiFolder.add(settings, 'particleCount', 100, 20000).name("Particle Count").step(100).onChange(val => this.recreatePointCloud(instanceObject, val)),
-                guiFolder.add(settings, 'distribution', ['sphere', 'cube', 'plane']).name("Distribution").onChange(val => this.resetPointCloudDistribution(instanceObject)),
-                guiFolder.add(settings, 'distributionScale', 1, 50).name("Dist Scale").step(1).onChange(val => this.resetPointCloudDistribution(instanceObject)),
+                guiFolder.add(settings, 'distribution', ['sphere', 'cube', 'plane']).name("Distribution").onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                guiFolder.add(settings, 'distributionScale', 1, 50).name("Dist Scale").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
                 guiFolder.add(settings, 'displacementScale', 0, 10).name("Displace Scale").step(0.1),
-                guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands']).name("Color Mapping") // Simplified options for points
+                guiFolder.add(settings, 'displacementMode', ['radial', 'frequencyBandDisplacement']).name("Displace Mode"),
+                guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands']).name("Color Mapping")
+             );
+        } else if (type === 'sphere') {
+             controllers.push(
+                 guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'widthSegments', 3, 64).name("Width Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'heightSegments', 2, 32).name("Height Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
+                 guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
+             );
+        } else if (type === 'torus') {
+             controllers.push(
+                 guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'radialSegments', 3, 64).name("Radial Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'tubularSegments', 3, 64).name("Tubular Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                 guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
+                 guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
              );
         }
+
 
         // Common Color Controls
         controllers.push(
@@ -315,6 +422,10 @@ export class ObjectManager {
         const defaults = this.templates[type].defaultSettings;
         const settings = instance.userData.settings;
 
+        // Store current transform
+        const currentPosition = instance.position.clone();
+        const currentRotation = instance.rotation.clone();
+
         // Reset settings to defaults (handle colors separately)
         for (const key in defaults) {
             if (!['lowColor', 'midColor', 'highColor', 'position', 'rotation', 'type'].includes(key) && typeof defaults[key] !== 'function') {
@@ -329,14 +440,32 @@ export class ObjectManager {
         settings.midColor.copy(defaults.midColor);
         settings.highColor.copy(defaults.highColor);
 
+        // Restore transform settings to current object state (don't reset position/rotation)
+        settings.position.copy(currentPosition);
+        settings.rotation.copy(currentRotation);
+
+
         // Reset specific material properties
-        if (type === 'grid') {
+        if (type === 'grid' || type === 'sphere' || type === 'torus') {
             instance.material.wireframe = settings.wireframe;
-            // Reset target heights (no longer needed)
-            // instance.userData.targetHeights.fill(0);
-        } else if (type === 'pointcloud') {
+        }
+        if (type === 'pointcloud') {
              instance.material.size = settings.particleSize;
-             this.resetPointCloudDistribution(instance); // Reset positions based on new settings
+        }
+
+        // Reset geometry based on new default settings (if applicable)
+        if (type === 'pointcloud' || type === 'sphere' || type === 'torus') {
+             this.resetObjectInitialGeometry(instance);
+        }
+        // For grid, reset Z positions
+        if (type === 'grid') {
+             const positions = instance.geometry.attributes.position.array;
+             const originalZ = instance.geometry.userData.originalZ;
+             for (let i = 0; i < originalZ.length; i++) {
+                 positions[i * 3 + 2] = originalZ[i]; // Reset Z
+             }
+             instance.geometry.attributes.position.needsUpdate = true;
+             instance.geometry.computeVertexNormals(); // Recompute normals after Z reset
         }
 
 
@@ -350,53 +479,121 @@ export class ObjectManager {
         console.log(`Instance ${instance.uuid} (${type}) settings reset to defaults.`);
     }
 
-    // Helper to reset point cloud positions based on current settings
-    resetPointCloudDistribution(instance) {
-        if (!instance || instance.userData.settings.type !== 'pointcloud') return;
+    // Helper to reset point cloud, sphere, or torus geometry based on current settings
+    resetObjectInitialGeometry(instance) {
+        if (!instance) return;
 
         const settings = instance.userData.settings;
+        const type = settings.type;
         const geometry = instance.geometry;
-        const positions = geometry.attributes.position.array;
-        const initialPositions = geometry.userData.initialPositions; // Get stored initial positions
 
-        // Recalculate initial positions based on current distribution settings
-        const particleCount = settings.particleCount; // Use the count from settings
-        const distributionScale = settings.distributionScale;
+        console.log(`Resetting initial geometry for ${type} instance ${instance.uuid}`);
 
-        for (let i = 0; i < particleCount; i++) {
-             let x, y, z;
-             switch (settings.distribution) {
-                 case 'cube':
-                     x = (Math.random() - 0.5) * distributionScale;
-                     y = (Math.random() - 0.5) * distributionScale;
-                     z = (Math.random() - 0.5) * distributionScale;
-                     break;
-                 case 'plane':
-                      x = (Math.random() - 0.5) * distributionScale;
-                      y = 0;
-                      z = (Math.random() - 0.5) * distributionScale;
-                      break;
-                 case 'sphere':
-                 default:
-                     const theta = Math.random() * Math.PI * 2;
-                     const phi = Math.acos((Math.random() * 2) - 1);
-                     const radius = Math.random() * distributionScale / 2;
-                     x = radius * Math.sin(phi) * Math.cos(theta);
-                     y = radius * Math.sin(phi) * Math.sin(theta);
-                     z = radius * Math.cos(phi);
-                     break;
-             }
-             // Update initial positions store
-             initialPositions[i * 3] = x;
-             initialPositions[i * 3 + 1] = y;
-             initialPositions[i * 3 + 2] = z;
-             // Also reset current positions
-             positions[i * 3] = x;
-             positions[i * 3 + 1] = y;
-             positions[i * 3 + 2] = z;
+        // --- Point Cloud Specific ---
+        if (type === 'pointcloud') {
+            const positions = geometry.attributes.position.array;
+            const initialPositions = geometry.userData.initialPositions;
+            const particleCount = settings.particleCount;
+            const distributionScale = settings.distributionScale;
+
+            // Ensure arrays are the correct size (important if particleCount could change)
+            // Note: Currently particleCount change isn't handled well, but this prepares for it.
+            if (initialPositions.length !== particleCount * 3) {
+                geometry.userData.initialPositions = new Float32Array(particleCount * 3);
+                // Position attribute also needs resizing if count changes - complex, deferring full dynamic count change
+                console.warn("Particle count change requires geometry recreation - not fully implemented.");
+            }
+
+            for (let i = 0; i < particleCount; i++) {
+                 let x, y, z;
+                 switch (settings.distribution) {
+                     case 'cube':
+                         x = (Math.random() - 0.5) * distributionScale;
+                         y = (Math.random() - 0.5) * distributionScale;
+                         z = (Math.random() - 0.5) * distributionScale;
+                         break;
+                     case 'plane':
+                          x = (Math.random() - 0.5) * distributionScale;
+                          y = 0;
+                          z = (Math.random() - 0.5) * distributionScale;
+                          break;
+                     case 'sphere':
+                     default:
+                         const theta = Math.random() * Math.PI * 2;
+                         const phi = Math.acos((Math.random() * 2) - 1);
+                         const radius = Math.random() * distributionScale / 2;
+                         x = radius * Math.sin(phi) * Math.cos(theta);
+                         y = radius * Math.sin(phi) * Math.sin(theta);
+                         z = radius * Math.cos(phi);
+                         break;
+                 }
+                 // Update initial positions store
+                 initialPositions[i * 3] = x;
+                 initialPositions[i * 3 + 1] = y;
+                 initialPositions[i * 3 + 2] = z;
+                 // Also reset current positions
+                 positions[i * 3] = x;
+                 positions[i * 3 + 1] = y;
+                 positions[i * 3 + 2] = z;
+            }
+            geometry.attributes.position.needsUpdate = true;
         }
-        geometry.attributes.position.needsUpdate = true;
-        console.log(`Instance ${instance.uuid} point cloud distribution reset.`);
+        // --- Sphere / Torus Specific ---
+        else if (type === 'sphere' || type === 'torus') {
+            // Recreate the geometry based on current settings
+            let newGeometry;
+            if (type === 'sphere') {
+                newGeometry = new THREE.SphereGeometry(settings.radius, settings.widthSegments, settings.heightSegments);
+            } else { // Torus
+                newGeometry = new THREE.TorusGeometry(settings.radius, settings.tube, settings.radialSegments, settings.tubularSegments);
+            }
+
+            // Dispose old geometry attributes
+            geometry.dispose(); // Dispose the old geometry object itself
+
+            // Assign new geometry attributes to the existing instance's geometry object
+            // This is generally safer than replacing geometry object entirely if other refs exist
+            instance.geometry.attributes = newGeometry.attributes;
+            instance.geometry.index = newGeometry.index;
+            instance.geometry.boundingBox = newGeometry.boundingBox;
+            instance.geometry.boundingSphere = newGeometry.boundingSphere;
+
+            // Update userData with new initial positions and normals
+            instance.geometry.userData.initialPositions = new Float32Array(newGeometry.attributes.position.array);
+            instance.geometry.userData.initialNormals = new Float32Array(newGeometry.attributes.normal.array);
+
+            // Re-add color attribute if it was removed during geometry update
+             if (!instance.geometry.attributes.color) {
+                 const numVertices = instance.geometry.attributes.position.count;
+                 const colors = new Float32Array(numVertices * 3).fill(1); // Default white
+                 instance.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                 console.log("Re-added color attribute after geometry reset.");
+             } else {
+                 // Ensure color buffer is correct size
+                 const numVertices = instance.geometry.attributes.position.count;
+                 if (instance.geometry.attributes.color.count !== numVertices) {
+                     const colors = new Float32Array(numVertices * 3).fill(1); // Default white
+                     instance.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                     console.log("Resized color attribute after geometry reset.");
+                 }
+             }
+
+
+            // Mark attributes for update
+            instance.geometry.attributes.position.needsUpdate = true;
+            instance.geometry.attributes.normal.needsUpdate = true;
+            if (instance.geometry.attributes.uv) instance.geometry.attributes.uv.needsUpdate = true;
+            if (instance.geometry.attributes.color) instance.geometry.attributes.color.needsUpdate = true;
+            if (instance.geometry.index) instance.geometry.index.needsUpdate = true;
+
+            // Compute normals just in case they weren't perfect from constructor
+            instance.geometry.computeVertexNormals();
+            instance.geometry.computeBoundingSphere(); // Update bounds
+
+            console.log(`Instance ${instance.uuid} geometry recreated.`);
+            newGeometry.dispose(); // Dispose the temporary geometry object
+
+        }
     }
 
 
@@ -427,7 +624,8 @@ export class ObjectManager {
                     this.gui.removeFolder(guiFolder);
                 } catch (e) {
                     console.warn("Could not remove GUI folder:", e);
-                    if (guiFolder.domElement.parentNode) {
+                    // Fallback removal if dat.gui internal state is broken
+                    if (guiFolder.domElement && guiFolder.domElement.parentNode) {
                          guiFolder.domElement.parentNode.removeChild(guiFolder.domElement);
                     }
                 }
@@ -600,9 +798,9 @@ export class ObjectManager {
         this.scene.add(this.transformControls);
         console.log("[ObjectManager] Transform controls object added to scene.");
 
-        // Explicitly add the helper as well
-        this.scene.add(this.transformControls.getHelper());
-        console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
+        // Explicitly add the helper as well (though TransformControls usually manages this)
+        // this.scene.add(this.transformControls.getHelper());
+        // console.log("[ObjectManager] Transform controls helper explicitly added to scene.");
 
         // --- Add event listeners directly to the renderer element ---
         this.boundOnPointerDown = this.onPointerDown.bind(this);
@@ -642,31 +840,34 @@ export class ObjectManager {
             this.updateGridGeometry(instance, audioManager, motionScore, cameraSettings);
         } else if (type === 'pointcloud') {
             this.updatePointCloudGeometry(instance, audioManager, motionScore, cameraSettings);
+        } else if (type === 'sphere') {
+            this.updateSphereGeometry(instance, audioManager, motionScore, cameraSettings);
+        } else if (type === 'torus') {
+            this.updateTorusGeometry(instance, audioManager, motionScore, cameraSettings);
         }
     }
+
+    // --- Geometry Update Functions ---
 
     updateGridGeometry(grid, audioManager, motionScore, cameraSettings) {
         const settings = grid.userData.settings;
         const frequencyData = audioManager.getFrequencyRangeData(settings.frequencyRange);
         const vertices = grid.geometry.attributes.position.array;
         const colors = grid.geometry.attributes.color.array;
-        // const targetHeights = grid.userData.targetHeights; // Removed - targetHeights not needed
+        const originalZ = grid.geometry.userData.originalZ; // Get original Z for reference
 
-        const size = grid.geometry.parameters.width;
+        const size = grid.geometry.parameters.width; // Use actual geometry params
         const segments = grid.geometry.parameters.widthSegments;
         const verticesPerSide = segments + 1;
         const halfSize = size / 2;
-        const maxDistance = Math.sqrt(halfSize * halfSize + halfSize * halfSize);
-        const verticesCount = vertices.length / 3; // Use actual vertices count
+        const maxDistance = Math.sqrt(halfSize * halfSize + halfSize * halfSize); // For radial/ripple
+        const verticesCount = vertices.length / 3;
 
         // Calculate effective parameters based on motion
         let effectiveHeightScale = settings.heightScale;
-        // let effectiveDecayRate = settings.decayRate; // Removed
-        if (cameraSettings.cameraMotionEnabled && audioManager.audioContext && settings.motionInfluenceFactor > 0) { // Check audio context too
+        if (cameraSettings.cameraMotionEnabled && audioManager.audioContext && settings.motionInfluenceFactor > 0) {
             const influence = motionScore * settings.motionInfluenceFactor;
             effectiveHeightScale = settings.heightScale * (1 + influence);
-            // effectiveDecayRate = settings.decayRate + (1.0 - settings.decayRate) * influence * 0.5; // Removed
-            // effectiveDecayRate = Math.min(effectiveDecayRate, 0.999); // Removed
         }
 
         // Get frequency band data if needed
@@ -677,27 +878,28 @@ export class ObjectManager {
             midAmp = audioManager.getAverageAmplitude('mid');
             highAmp = audioManager.getAverageAmplitude('high');
         }
+        const avgAmp = audioManager.getAverageAmplitude(settings.frequencyRange); // For ripple
 
         const time = performance.now() * 0.002;
         const tempColor = new THREE.Color(); // Reuse color object
 
-        for (let i = 0; i < verticesCount; i++) { // Iterate up to verticesCount
-            const x = vertices[i * 3]; // Get X from position attribute
-            const y = vertices[i * 3 + 1]; // Get Y from position attribute (local Y, world Z)
+        for (let i = 0; i < verticesCount; i++) {
+            const x = vertices[i * 3];
+            const y = vertices[i * 3 + 1]; // Local Y (world Z for default grid orientation)
+            const zIndex = i * 3 + 2; // Index for Z component (local Z, world Y)
 
             let audioValue = 0;
             let patternHeight = 0;
+            const distance = Math.sqrt(x * x + y * y); // Distance from center (0,0)
 
             if (frequencyData.length > 0 && audioManager.audioContext) {
                 switch (settings.wavePattern) {
                     case 'radial':
-                        const distance = Math.sqrt(x * x + y * y);
                         const normalizedDistance = Math.min(distance / maxDistance, 1.0);
                         const index = Math.floor(normalizedDistance * (frequencyData.length - 1));
                         audioValue = frequencyData[index] || 0;
                         break;
                     case 'linear':
-                        // Map vertex index to frequency data index more carefully
                         const linearIndex = i % frequencyData.length;
                         audioValue = frequencyData[linearIndex] || 0;
                         break;
@@ -705,16 +907,26 @@ export class ObjectManager {
                         audioValue = frequencyData[Math.floor(Math.random() * frequencyData.length)] || 0;
                         break;
                     case 'sineWave':
-                        const distFromCenter = Math.sqrt(x * x + y * y);
                         const avgMidAmpNorm = midAmp / 255;
-                        patternHeight = Math.sin(distFromCenter * (1 + avgMidAmpNorm * 2) - time * (1 + avgMidAmpNorm * 5)) * (0.5 + avgMidAmpNorm);
-                        audioValue = audioManager.getAverageAmplitude(settings.frequencyRange);
+                        patternHeight = Math.sin(distance * (1 + avgMidAmpNorm * 2) - time * (1 + avgMidAmpNorm * 5)) * (0.5 + avgMidAmpNorm);
+                        audioValue = avgAmp; // Use average amplitude for overall height
                         break;
                     case 'checkerboard':
                         const scale = 4.0;
                         const checkX = Math.floor((x + halfSize) / scale);
                         const checkY = Math.floor((y + halfSize) / scale);
                         audioValue = ((checkX + checkY) % 2 === 0) ? lowAmp : highAmp;
+                        break;
+                    case 'ripple':
+                        const rippleSpeed = 3.0;
+                        const rippleFreq = 5.0;
+                        const rippleDecay = 2.0;
+                        const normalizedAvgAmp = avgAmp / 255;
+                        // Calculate ripple based on distance from center and time, modulated by audio
+                        patternHeight = Math.sin(distance * rippleFreq - time * rippleSpeed * (1 + normalizedAvgAmp))
+                                      * Math.max(0, 1 - (distance / (maxDistance * (0.5 + normalizedAvgAmp*0.5)))) // Decay outwards
+                                      * normalizedAvgAmp * 1.5; // Scale by audio amplitude
+                        audioValue = avgAmp; // Base height on average amplitude
                         break;
                     default:
                          const defaultIndex = i % frequencyData.length;
@@ -725,17 +937,12 @@ export class ObjectManager {
             const audioHeight = (audioValue / 255) * effectiveHeightScale * settings.audioInfluence;
             const totalPatternHeight = audioHeight + (patternHeight * effectiveHeightScale * settings.audioInfluence);
 
-            // Removed targetHeights decay logic
-            // targetHeights[i] *= effectiveDecayRate;
-            // if (targetHeights[i] < 0.01) targetHeights[i] = 0;
-
-            // const finalHeight = Math.max(targetHeights[i], totalPatternHeight); // Use only pattern height now
-            const finalHeight = totalPatternHeight;
-            vertices[i * 3 + 2] = finalHeight; // Set Z position (local Z, world Y)
+            // Set Z position relative to original Z (which is 0 for PlaneGeometry)
+            vertices[zIndex] = originalZ[i] + totalPatternHeight;
 
             // --- Color Calculation ---
             let colorFactor = 0;
-            const normalizedHeight = finalHeight / effectiveHeightScale; // Normalize based on effective scale
+            const normalizedHeight = totalPatternHeight / effectiveHeightScale; // Normalize based on effective scale
             const normalizedAudio = audioValue / 255;
 
             switch (settings.colorMapping) {
@@ -784,9 +991,15 @@ export class ObjectManager {
         const positions = geometry.attributes.position.array;
         const colors = geometry.attributes.color.array;
         const initialPositions = geometry.userData.initialPositions;
-        const particleCount = settings.particleCount;
+        const particleCount = settings.particleCount; // Use count from settings
 
-        const frequencyData = audioManager.getFrequencyRangeData(settings.frequencyRange);
+        // Ensure buffers match particle count (basic check)
+        if (positions.length !== particleCount * 3 || initialPositions.length !== particleCount * 3 || colors.length !== particleCount * 3) {
+             console.warn(`Point cloud buffer size mismatch (Settings: ${particleCount}, Buffers: ${positions.length/3}). Skipping update.`);
+             // Ideally, trigger geometry recreation here if count changed.
+             return;
+        }
+
         const averageAmplitude = audioManager.getAverageAmplitude(settings.frequencyRange); // Normalized 0-255
 
         // Calculate effective parameters based on motion
@@ -798,7 +1011,8 @@ export class ObjectManager {
 
         // Get frequency band data if needed
         let lowAmpNorm = 0, midAmpNorm = 0, highAmpNorm = 0;
-        if (settings.colorMapping === 'frequencyBands' && audioManager.audioContext) {
+        const useFreqBands = settings.colorMapping === 'frequencyBands' || settings.displacementMode === 'frequencyBandDisplacement';
+        if (useFreqBands && audioManager.audioContext) {
             lowAmpNorm = audioManager.getAverageAmplitude('low') / 255;
             midAmpNorm = audioManager.getAverageAmplitude('mid') / 255;
             highAmpNorm = audioManager.getAverageAmplitude('high') / 255;
@@ -816,14 +1030,29 @@ export class ObjectManager {
             const initialZ = initialPositions[i3 + 2];
 
             let displacement = 0;
-            if (frequencyData.length > 0 && audioManager.audioContext) {
-                // Use average amplitude for overall displacement magnitude
-                const normalizedAvgAmp = averageAmplitude / 255;
-                displacement = normalizedAvgAmp * effectiveDisplacementScale * settings.audioInfluence;
+            directionVector.set(initialX, initialY, initialZ).normalize(); // Direction from origin
+
+            if (audioManager.audioContext) {
+                switch(settings.displacementMode) {
+                    case 'frequencyBandDisplacement':
+                        // Displace based on which frequency band is strongest, or a mix
+                        // Simple approach: displace by sum of scaled band amplitudes
+                        displacement = (lowAmpNorm + midAmpNorm + highAmpNorm) / 3 * effectiveDisplacementScale * settings.audioInfluence;
+                        // More complex: displace differently based on initial position?
+                        // Or displace along different axes based on freq? e.g., low=X, mid=Y, high=Z
+                        // Let's try displacing along initial direction but scaled by different freqs
+                        const freqDisplacement = (lowAmpNorm * 0.5 + midAmpNorm * 1.0 + highAmpNorm * 1.5) / 3.0; // Weight highs more
+                        displacement = freqDisplacement * effectiveDisplacementScale * settings.audioInfluence;
+                        break;
+                    case 'radial':
+                    default:
+                         // Use average amplitude for overall displacement magnitude
+                         const normalizedAvgAmp = averageAmplitude / 255;
+                         displacement = normalizedAvgAmp * effectiveDisplacementScale * settings.audioInfluence;
+                         break;
+                }
             }
 
-            // Calculate direction from origin to initial position
-            directionVector.set(initialX, initialY, initialZ).normalize();
 
             // Apply displacement along the direction vector
             positions[i3] = initialX + directionVector.x * displacement;
@@ -833,7 +1062,7 @@ export class ObjectManager {
 
             // --- Color Calculation ---
             let colorFactor = 0;
-            const normalizedAudio = averageAmplitude / 255; // Use average amplitude for color
+            const normalizedAudio = averageAmplitude / 255; // Use average amplitude for 'audio' color
 
             switch (settings.colorMapping) {
                 case 'audio':
@@ -869,6 +1098,213 @@ export class ObjectManager {
         // No normals needed for points
     }
 
+    updateSphereGeometry(sphere, audioManager, motionScore, cameraSettings) {
+        const settings = sphere.userData.settings;
+        const geometry = sphere.geometry;
+        const positions = geometry.attributes.position.array;
+        const colors = geometry.attributes.color.array;
+        const initialPositions = geometry.userData.initialPositions;
+        const initialNormals = geometry.userData.initialNormals;
+        const numVertices = positions.length / 3;
+
+        // Ensure buffers match vertex count (basic check)
+        if (initialPositions.length !== numVertices * 3 || initialNormals.length !== numVertices * 3 || colors.length !== numVertices * 3) {
+             console.warn(`Sphere buffer size mismatch. Skipping update.`);
+             return;
+        }
+
+        const averageAmplitude = audioManager.getAverageAmplitude(settings.frequencyRange); // Normalized 0-255
+
+        // Calculate effective parameters based on motion
+        let effectiveDisplacementScale = settings.displacementScale;
+        if (cameraSettings.cameraMotionEnabled && audioManager.audioContext && settings.motionInfluenceFactor > 0) {
+            const influence = motionScore * settings.motionInfluenceFactor;
+            effectiveDisplacementScale = settings.displacementScale * (1 + influence);
+        }
+
+        // Get frequency band data if needed
+        let lowAmpNorm = 0, midAmpNorm = 0, highAmpNorm = 0;
+        const useFreqBands = settings.colorMapping === 'frequencyBands';
+        if (useFreqBands && audioManager.audioContext) {
+            lowAmpNorm = audioManager.getAverageAmplitude('low') / 255;
+            midAmpNorm = audioManager.getAverageAmplitude('mid') / 255;
+            highAmpNorm = audioManager.getAverageAmplitude('high') / 255;
+        }
+
+        const tempColor = new THREE.Color(); // Reuse color object
+        const tempNormal = new THREE.Vector3(); // Reuse vector
+
+        for (let i = 0; i < numVertices; i++) {
+            const i3 = i * 3;
+
+            // --- Position Calculation ---
+            const initialX = initialPositions[i3];
+            const initialY = initialPositions[i3 + 1];
+            const initialZ = initialPositions[i3 + 2];
+
+            // Get the initial normal for this vertex
+            tempNormal.set(initialNormals[i3], initialNormals[i3 + 1], initialNormals[i3 + 2]);
+
+            let displacement = 0;
+            if (audioManager.audioContext) {
+                const normalizedAvgAmp = averageAmplitude / 255;
+                displacement = normalizedAvgAmp * effectiveDisplacementScale * settings.audioInfluence;
+            }
+
+            // Apply displacement along the initial normal
+            positions[i3] = initialX + tempNormal.x * displacement;
+            positions[i3 + 1] = initialY + tempNormal.y * displacement;
+            positions[i3 + 2] = initialZ + tempNormal.z * displacement;
+
+            // --- Color Calculation ---
+            let colorFactor = 0;
+            const normalizedAudio = averageAmplitude / 255;
+
+            switch (settings.colorMapping) {
+                case 'audio':
+                    colorFactor = THREE.MathUtils.clamp(normalizedAudio, 0, 1);
+                    break;
+                case 'frequencyBands':
+                    tempColor.setRGB(0, 0, 0);
+                    if (audioManager.audioContext) {
+                        tempColor.lerp(settings.lowColor, lowAmpNorm);
+                        tempColor.lerp(settings.midColor, midAmpNorm);
+                        tempColor.lerp(settings.highColor, highAmpNorm);
+                    } else {
+                        tempColor.copy(settings.midColor); // Default color if no audio
+                    }
+                    break;
+                case 'normal':
+                     // Color based on normal direction (e.g., map X,Y,Z to R,G,B)
+                     // Use the *initial* normal for consistent coloring
+                     colorFactor = (tempNormal.x + 1) / 2; // Map X from [-1, 1] to [0, 1] for Red
+                     const gFactor = (tempNormal.y + 1) / 2; // Map Y for Green
+                     const bFactor = (tempNormal.z + 1) / 2; // Map Z for Blue
+                     tempColor.setRGB(colorFactor, gFactor, bFactor);
+                     break;
+            }
+
+            if (settings.colorMapping === 'audio') { // Only apply lerp for 'audio' mode
+                 if (colorFactor < 0.5) {
+                     tempColor.lerpColors(settings.lowColor, settings.midColor, colorFactor * 2);
+                 } else {
+                     tempColor.lerpColors(settings.midColor, settings.highColor, (colorFactor - 0.5) * 2);
+                 }
+            }
+
+            colors[i3] = tempColor.r;
+            colors[i3 + 1] = tempColor.g;
+            colors[i3 + 2] = tempColor.b;
+        }
+
+        geometry.attributes.position.needsUpdate = true;
+        geometry.attributes.color.needsUpdate = true;
+        geometry.computeVertexNormals(); // Recompute normals after displacement
+    }
+
+    updateTorusGeometry(torus, audioManager, motionScore, cameraSettings) {
+        const settings = torus.userData.settings;
+        const geometry = torus.geometry;
+        const positions = geometry.attributes.position.array;
+        const colors = geometry.attributes.color.array;
+        const initialPositions = geometry.userData.initialPositions;
+        const initialNormals = geometry.userData.initialNormals;
+        const numVertices = positions.length / 3;
+
+         // Ensure buffers match vertex count (basic check)
+         if (initialPositions.length !== numVertices * 3 || initialNormals.length !== numVertices * 3 || colors.length !== numVertices * 3) {
+             console.warn(`Torus buffer size mismatch. Skipping update.`);
+             return;
+         }
+
+        const averageAmplitude = audioManager.getAverageAmplitude(settings.frequencyRange); // Normalized 0-255
+
+        // Calculate effective parameters based on motion
+        let effectiveDisplacementScale = settings.displacementScale;
+        if (cameraSettings.cameraMotionEnabled && audioManager.audioContext && settings.motionInfluenceFactor > 0) {
+            const influence = motionScore * settings.motionInfluenceFactor;
+            effectiveDisplacementScale = settings.displacementScale * (1 + influence);
+        }
+
+        // Get frequency band data if needed
+        let lowAmpNorm = 0, midAmpNorm = 0, highAmpNorm = 0;
+        const useFreqBands = settings.colorMapping === 'frequencyBands';
+        if (useFreqBands && audioManager.audioContext) {
+            lowAmpNorm = audioManager.getAverageAmplitude('low') / 255;
+            midAmpNorm = audioManager.getAverageAmplitude('mid') / 255;
+            highAmpNorm = audioManager.getAverageAmplitude('high') / 255;
+        }
+
+        const tempColor = new THREE.Color(); // Reuse color object
+        const tempNormal = new THREE.Vector3(); // Reuse vector
+
+        for (let i = 0; i < numVertices; i++) {
+            const i3 = i * 3;
+
+            // --- Position Calculation ---
+            const initialX = initialPositions[i3];
+            const initialY = initialPositions[i3 + 1];
+            const initialZ = initialPositions[i3 + 2];
+
+            // Get the initial normal for this vertex
+            tempNormal.set(initialNormals[i3], initialNormals[i3 + 1], initialNormals[i3 + 2]);
+
+            let displacement = 0;
+            if (audioManager.audioContext) {
+                const normalizedAvgAmp = averageAmplitude / 255;
+                displacement = normalizedAvgAmp * effectiveDisplacementScale * settings.audioInfluence;
+            }
+
+            // Apply displacement along the initial normal
+            positions[i3] = initialX + tempNormal.x * displacement;
+            positions[i3 + 1] = initialY + tempNormal.y * displacement;
+            positions[i3 + 2] = initialZ + tempNormal.z * displacement;
+
+            // --- Color Calculation ---
+            let colorFactor = 0;
+            const normalizedAudio = averageAmplitude / 255;
+
+            switch (settings.colorMapping) {
+                case 'audio':
+                    colorFactor = THREE.MathUtils.clamp(normalizedAudio, 0, 1);
+                    break;
+                case 'frequencyBands':
+                    tempColor.setRGB(0, 0, 0);
+                    if (audioManager.audioContext) {
+                        tempColor.lerp(settings.lowColor, lowAmpNorm);
+                        tempColor.lerp(settings.midColor, midAmpNorm);
+                        tempColor.lerp(settings.highColor, highAmpNorm);
+                    } else {
+                        tempColor.copy(settings.midColor); // Default color if no audio
+                    }
+                    break;
+                case 'normal':
+                     // Color based on normal direction (e.g., map X,Y,Z to R,G,B)
+                     colorFactor = (tempNormal.x + 1) / 2; // Map X from [-1, 1] to [0, 1] for Red
+                     const gFactor = (tempNormal.y + 1) / 2; // Map Y for Green
+                     const bFactor = (tempNormal.z + 1) / 2; // Map Z for Blue
+                     tempColor.setRGB(colorFactor, gFactor, bFactor);
+                     break;
+            }
+
+            if (settings.colorMapping === 'audio') { // Only apply lerp for 'audio' mode
+                 if (colorFactor < 0.5) {
+                     tempColor.lerpColors(settings.lowColor, settings.midColor, colorFactor * 2);
+                 } else {
+                     tempColor.lerpColors(settings.midColor, settings.highColor, (colorFactor - 0.5) * 2);
+                 }
+            }
+
+            colors[i3] = tempColor.r;
+            colors[i3 + 1] = tempColor.g;
+            colors[i3 + 2] = tempColor.b;
+        }
+
+        geometry.attributes.position.needsUpdate = true;
+        geometry.attributes.color.needsUpdate = true;
+        geometry.computeVertexNormals(); // Recompute normals after displacement
+    }
+
 
     // --- Cleanup ---
 
@@ -893,12 +1329,12 @@ export class ObjectManager {
             // Detach from any object first
             this.transformControls.detach();
 
-            // Remove the helper object from the scene
-            const helper = this.transformControls.getHelper();
-            if (helper && helper.parent) {
-                this.scene.remove(helper);
-                console.log("[ObjectManager] Transform controls helper removed from scene.");
-            }
+            // Remove the helper object from the scene (TransformControls might manage this itself)
+            // const helper = this.transformControls.getHelper();
+            // if (helper && helper.parent) {
+            //     this.scene.remove(helper);
+            //     console.log("[ObjectManager] Transform controls helper removed from scene.");
+            // }
 
             // Remove the main control object from the scene
             if (this.transformControls.parent) { // Check if main control object is in scene

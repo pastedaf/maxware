@@ -13,8 +13,8 @@ import { CameraManager } from './CameraManager.js';
 import { CameraVisualizer } from './CameraVisualizer.js';
 
 // --- Constants ---
-const GRID_SIZE = 15; // Physical size for grids
-const GRID_SEGMENTS = 63; // Number of segments for grids
+const GRID_SIZE = 15; // Physical size for grids (used for initial grid and camera positioning)
+const GRID_SEGMENTS = 63; // Number of segments for grids (used for initial grid)
 const VIDEO_ELEMENT_ID = 'webcamFeed'; // ID of the video element in HTML
 
 // --- Basic Setup ---
@@ -46,7 +46,8 @@ const objectManager = new ObjectManager(scene, gui, GRID_SIZE, GRID_SEGMENTS); /
 const cameraVisualizer = new CameraVisualizer(scene, cameraManager, {
     widthSegments: 128,
     heightSegments: 96,
-    visible: false
+    visible: false,
+    colorMode: 'brightness' // Initial color mode
 });
 
 // --- Post Processing ---
@@ -117,8 +118,10 @@ const settings = {
     fxaaEnabled: true,
     pixelSize: pixelatePass.uniforms.pixelSize.value,
     // Instance Management Functions (bound to GUI)
-    addGrid: () => objectManager.addInstance('grid'), // Add Grid function
-    addPointCloud: () => objectManager.addInstance('pointcloud'), // Add Point Cloud function
+    addGrid: () => objectManager.addInstance('grid'),
+    addPointCloud: () => objectManager.addInstance('pointcloud'),
+    addSphere: () => objectManager.addInstance('sphere'), // Added
+    addTorus: () => objectManager.addInstance('torus'),   // Added
     deleteCurrent: () => objectManager.deleteCurrent(),
 };
 
@@ -140,6 +143,7 @@ const cameraSettings = {
     cameraVisualizationEnabled: false,
     visualizationDepthScale: cameraVisualizer.options.depthScale,
     visualizationParticleSize: cameraVisualizer.options.particleSize,
+    visualizationColorMode: cameraVisualizer.options.colorMode, // Added
 };
 
 
@@ -227,6 +231,8 @@ audioCameraFolder.add(cameraSettings, 'cameraVisualizationEnabled').name('Enable
             } else { alert("Please select a Camera Source first."); cameraSettings.cameraVisualizationEnabled = false; audioCameraFolder.__controllers.forEach(c => { if (c.property === 'cameraVisualizationEnabled') c.updateDisplay(); }); return; }
         } else { cameraVisualizer.setVisible(false); if (!cameraSettings.cameraMotionEnabled) { cameraManager.stop(); } }
     });
+// --- Camera Visualizer Controls ---
+audioCameraFolder.add(cameraSettings, 'visualizationColorMode', ['brightness', 'color']).name('Vis Color Mode').onChange(val => cameraVisualizer.setColorMode(val)); // Added
 audioCameraFolder.add(cameraSettings, 'visualizationDepthScale', 1, 20).name('Vis Depth Scale').onChange(val => cameraVisualizer.setDepthScale(val));
 audioCameraFolder.add(cameraSettings, 'visualizationParticleSize', 0.01, 0.5).name('Vis Particle Size').onChange(val => cameraVisualizer.setParticleSize(val));
 audioCameraFolder.open();
@@ -244,8 +250,10 @@ ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = v
 
 // Instance Management Folder
 const instanceManagement = gui.addFolder('Instance Management');
-instanceManagement.add(settings, 'addGrid').name("Add Grid"); // Changed
-instanceManagement.add(settings, 'addPointCloud').name("Add Point Cloud"); // Added
+instanceManagement.add(settings, 'addGrid').name("Add Grid");
+instanceManagement.add(settings, 'addPointCloud').name("Add Point Cloud");
+instanceManagement.add(settings, 'addSphere').name("Add Sphere"); // Added
+instanceManagement.add(settings, 'addTorus').name("Add Torus");   // Added
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
 instanceManagement.open();
 
@@ -298,13 +306,7 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 });
 
 
-// REMOVED: Global mouse listeners for selection/deselection.
-// This logic is now handled within ObjectManager.js
-/*
-window.addEventListener('mousedown', (e) => { ... });
-window.addEventListener('mousemove', (e) => { ... });
-window.addEventListener('mouseup', (e) => { ... });
-*/
+// Interaction listeners are now handled within ObjectManager.js
 
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -317,9 +319,7 @@ window.addEventListener('resize', () => {
 
 // --- Core Logic Functions ---
 
-// Removed pokeGrid function
-
-// updateGrid function is now part of ObjectManager (updateObject)
+// updateObject logic is now within ObjectManager
 
 // --- Animation Loop ---
 let lastTimestamp = 0;
@@ -339,10 +339,12 @@ function animate(timestamp) {
     }
 
     // --- Update Camera Visualization ---
+    // Update visualizer if it's enabled AND camera is running
     if (cameraSettings.cameraVisualizationEnabled && cameraManager.isRunning) {
         cameraVisualizer.update(); // Update particle positions/colors using the frame processed above
-    } else if (!cameraSettings.cameraVisualizationEnabled && cameraVisualizer.points && cameraVisualizer.points.visible) {
-        cameraVisualizer.setVisible(false); // Ensure hidden if disabled
+    } else if (cameraVisualizer.points && cameraVisualizer.points.visible) {
+        // Ensure visualizer is hidden if it shouldn't be running
+        cameraVisualizer.setVisible(false);
     }
 
 
@@ -371,5 +373,6 @@ function animate(timestamp) {
 // --- Initialization ---
 objectManager.addInstance('grid'); // Add the initial grid
 // objectManager.addInstance('pointcloud'); // Optionally add a point cloud initially
+// objectManager.addInstance('sphere'); // Optionally add a sphere initially
 objectManager.setupTransformControls(camera, renderer, orbitControls); // Setup controls *after* first instance exists
 animate(0); // Start the animation loop

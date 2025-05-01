@@ -13,6 +13,7 @@ export class CameraVisualizer {
             depthScale: options.depthScale || 5.0, // How much brightness affects Z position
             visualScale: options.visualScale || 15, // Size of the particle plane in the scene
             visible: options.visible || false,
+            colorMode: options.colorMode || 'brightness', // 'brightness' or 'color'
         };
 
         this.geometry = null;
@@ -84,14 +85,21 @@ export class CameraVisualizer {
     }
 
     update() {
-        if (!this.isInitialized || !this.options.visible || !this.cameraManager.isRunning || !this.cameraManager.isInitialized || !this.cameraManager.videoElement.readyState >= this.cameraManager.videoElement.HAVE_METADATA) {
-            // Hide points if conditions aren't met but should be visible
-            if (this.points && this.points.visible !== this.options.visible) {
-                 this.points.visible = false; // Ensure hidden if not ready or disabled
+        // Check if ready to update
+        const canUpdate = this.isInitialized &&
+                          this.options.visible &&
+                          this.cameraManager.isRunning &&
+                          this.cameraManager.isInitialized &&
+                          this.cameraManager.videoElement.readyState >= this.cameraManager.videoElement.HAVE_METADATA &&
+                          this.cameraManager.currentFrameCanvas.width > 0 &&
+                          this.cameraManager.currentFrameCanvas.height > 0;
+
+
+        if (!canUpdate) {
+            // Ensure points are hidden if conditions aren't met
+            if (this.points && this.points.visible) {
+                 this.points.visible = false;
             }
-             if (this.points && !this.options.visible && this.points.visible) {
-                 this.points.visible = false; // Ensure hidden if explicitly disabled
-             }
             return;
         }
 
@@ -100,32 +108,13 @@ export class CameraVisualizer {
             this.points.visible = true;
         }
 
-        // Use the CameraManager's canvas context if available, otherwise draw video to a temporary one
-        // Assuming CameraManager has a context `currentFrameCtx` it draws to.
-        // If not, we'd need to create a temporary canvas here.
-        const ctx = this.cameraManager.currentFrameCtx; // Access the context used in CameraManager
+        // Access the canvas and context used in CameraManager's processFrame
+        const ctx = this.cameraManager.currentFrameCtx;
         const canvas = ctx.canvas;
-        const videoWidth = canvas.width; // Use canvas dimensions
+        const videoWidth = canvas.width;
         const videoHeight = canvas.height;
 
-        // Make sure canvas size matches video element intrinsic size if needed
-        // This should ideally be handled within CameraManager when video starts
-        if (canvas.width !== this.cameraManager.videoElement.videoWidth || canvas.height !== this.cameraManager.videoElement.videoHeight) {
-             canvas.width = this.cameraManager.videoElement.videoWidth;
-             canvas.height = this.cameraManager.videoElement.videoHeight;
-             // Re-draw the current frame if dimensions changed
-             // ctx.drawImage(this.cameraManager.videoElement, 0, 0, canvas.width, canvas.height);
-             // Note: CameraManager's processFrame likely handles drawing already.
-             console.warn("CameraVisualizer: Canvas size mismatch detected.");
-             // We might need to adjust particle sampling logic if aspect ratio changes significantly
-        }
-
-
-        if (videoWidth === 0 || videoHeight === 0) {
-            console.log("CameraVisualizer: Video dimensions are zero.");
-            return; // Skip update if video dimensions aren't valid
-        }
-
+        // Get image data (already drawn in CameraManager.processFrame)
         const imageData = ctx.getImageData(0, 0, videoWidth, videoHeight);
         const data = imageData.data;
 
@@ -137,26 +126,36 @@ export class CameraVisualizer {
             for (let j = 0; j < this.options.heightSegments; j++) {
                 // Map particle grid coordinates (u, v) to video texture coordinates
                 const u = i / (this.options.widthSegments - 1);
-                const v = 1.0 - (j / (this.options.heightSegments - 1)); // Flip V for image coords
+                // Flip V for image coords (0,0 is top-left in canvas, but often bottom-left in textures)
+                // Let's keep particle Y increasing upwards, so sample image Y downwards.
+                const v = 1.0 - (j / (this.options.heightSegments - 1));
 
                 // Calculate corresponding pixel index in the ImageData
                 const sampleX = Math.floor(u * (videoWidth - 1));
                 const sampleY = Math.floor(v * (videoHeight - 1));
                 const pixelIndex = (sampleY * videoWidth + sampleX) * 4; // 4 components (R, G, B, A)
 
-                // Calculate brightness (average of R, G, B)
-                const r = data[pixelIndex];
-                const g = data[pixelIndex + 1];
-                const b = data[pixelIndex + 2];
-                const brightness = (r + g + b) / 3 / 255; // Normalize to 0-1
+                // Sample color components
+                const r = data[pixelIndex] / 255.0;     // Normalize to 0-1
+                const g = data[pixelIndex + 1] / 255.0;
+                const b = data[pixelIndex + 2] / 255.0;
 
-                // Update Z position based on brightness
+                // Calculate brightness (average of R, G, B)
+                const brightness = (r + g + b) / 3;
+
+                // Update Z position based on brightness (always, regardless of color mode)
                 positions[k * 3 + 2] = brightness * this.options.depthScale;
 
-                // Update color to grayscale based on brightness
-                colors[k * 3] = brightness;
-                colors[k * 3 + 1] = brightness;
-                colors[k * 3 + 2] = brightness;
+                // Update color based on selected mode
+                if (this.options.colorMode === 'color') {
+                    colors[k * 3] = r;
+                    colors[k * 3 + 1] = g;
+                    colors[k * 3 + 2] = b;
+                } else { // 'brightness' mode
+                    colors[k * 3] = brightness;
+                    colors[k * 3 + 1] = brightness;
+                    colors[k * 3 + 2] = brightness;
+                }
 
                 k++;
             }
@@ -171,9 +170,10 @@ export class CameraVisualizer {
         if (visible && !this.isInitialized) {
             this.init(); // Initialize if set visible for the first time
         } else if (this.points) {
-            this.points.visible = visible;
+            // Visibility will be handled by the update loop based on conditions
+            // this.points.visible = visible; // Let update() manage visibility based on readiness
         }
-         // If turning visible, trigger an immediate update if possible
+         // If turning visible, trigger an immediate update if possible (conditions allowing)
          if (visible && this.isInitialized) {
              this.update();
          }
@@ -187,7 +187,19 @@ export class CameraVisualizer {
          this.options.particleSize = size;
          if (this.material) {
              this.material.size = size;
-             this.material.needsUpdate = true;
+             this.material.needsUpdate = true; // Not strictly necessary for size, but good practice
+         }
+     }
+
+     setColorMode(mode) {
+         if (mode === 'brightness' || mode === 'color') {
+             this.options.colorMode = mode;
+             // Trigger an update to reflect the change immediately if visible
+             if (this.options.visible) {
+                 this.update();
+             }
+         } else {
+             console.warn(`CameraVisualizer: Invalid color mode "${mode}". Use 'brightness' or 'color'.`);
          }
      }
 
