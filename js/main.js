@@ -303,13 +303,18 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 
 // Mouse Interaction for Object Selection / Deselection
 window.addEventListener('mousedown', (e) => {
-    // Ignore clicks on the GUI
+    // 1. Ignore clicks on the GUI
     if (e.target.closest('.dg')) return;
 
-    // Ignore clicks if TransformControls is currently being dragged
-    if (objectManager.transformControls?.dragging) return;
+    // 2. Check if the TransformControls gizmo is hovered or being dragged.
+    //    If so, let TransformControls handle the event exclusively.
+    const controls = objectManager.transformControls;
+    // Use optional chaining ?. in case controls are not yet initialized
+    if (controls?.hovered || controls?.dragging) {
+        return; // Let TransformControls handle this click/drag start
+    }
 
-    // Update mouse coordinates
+    // 3. If not interacting with the gizmo, proceed with object selection/deselection
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
@@ -318,19 +323,17 @@ window.addEventListener('mousedown', (e) => {
     const intersects = raycaster.intersectObjects(intersectableObjects, false);
 
     if (intersects.length > 0) {
-        // Clicked on a managed object
+        // Clicked on a managed object (and not the gizmo)
         const clickedObject = intersects[0].object;
 
         // Only select if it's not already the current instance
-        // If it *is* the current instance, let TransformControls handle the click (potential drag start)
         if (objectManager.currentInstance !== clickedObject) {
             objectManager.selectInstance(clickedObject);
         }
         // If clickedObject IS the currentInstance, do nothing here.
 
     } else {
-        // Clicked on empty space (and not dragging the controls)
-        // Deselect the current object and detach controls
+        // Clicked on empty space (and not the gizmo)
         objectManager.deselectInstance();
     }
 });
