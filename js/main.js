@@ -307,24 +307,37 @@ window.addEventListener('mousedown', (e) => {
     // 1. Ignore clicks on the GUI
     if (e.target.closest('.dg')) return;
 
-    // 2. Check if the TransformControls gizmo is hovered or being dragged.
-    //    If so, let TransformControls handle the event exclusively.
-    const controls = objectManager.transformControls;
-    if (controls?.hovered || controls?.dragging) {
-        return; // Let TransformControls handle this click/drag start
-    }
-
-    // 3. Record the starting position for click detection in mouseup
+    // 2. Record the starting position for click detection in mouseup
     onDownPosition.x = e.clientX;
     onDownPosition.y = e.clientY;
 
-    // 4. DO NOT raycast or select/deselect here. Let mouseup handle clicks.
+    // 3. DO NOT check for gizmo hover/drag here, let TransformControls handle its events.
+    // 4. DO NOT raycast or select/deselect here.
 });
 
 window.addEventListener('mousemove', (e) => {
-    // No custom logic needed here.
-    // OrbitControls handles camera movement when not dragging transform controls.
-    // TransformControls handles gizmo dragging internally.
+    // 1. Ignore if GUI is involved or if TransformControls is dragging
+    if (e.target.closest('.dg') || objectManager.transformControls?.dragging) {
+        return;
+    }
+
+    // 2. Update mouse coords and raycast
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    // 3. Check for intersections with selectable objects
+    const intersectableObjects = objectManager.instances;
+    const intersects = raycaster.intersectObjects(intersectableObjects, false);
+
+    if (intersects.length > 0) {
+        const object = intersects[0].object;
+        // 4. If intersected object is different from the current one, select it
+        if (object !== objectManager.currentInstance) {
+            objectManager.selectInstance(object);
+        }
+    }
+    // 5. DO NOT deselect here. Deselection happens on mouseup click.
 });
 
 window.addEventListener('mouseup', (e) => {
@@ -342,28 +355,31 @@ window.addEventListener('mouseup', (e) => {
     onUpPosition.x = e.clientX;
     onUpPosition.y = e.clientY;
 
-    if (onDownPosition.distanceTo(onUpPosition) > 1) { // Allow tiny drag tolerance
-        // It was likely an OrbitControls drag, not a click. Do nothing for selection.
+    if (onDownPosition.distanceTo(onUpPosition) > 2) { // Slightly larger drag tolerance
+        // It was likely an OrbitControls drag or a completed TransformControls drag.
+        // Do nothing for selection/deselection.
         return;
     }
 
-    // 4. It was a CLICK. Perform selection/deselection logic.
+    // 4. It was a CLICK. Check if we clicked on empty space.
+    // We need to raycast *again* here to be sure where the click landed.
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-
     raycaster.setFromCamera(mouse, camera);
+
     const intersectableObjects = objectManager.instances;
     const intersects = raycaster.intersectObjects(intersectableObjects, false);
 
-    if (intersects.length > 0) {
-        // Clicked on a managed object
-        const clickedObject = intersects[0].object;
-        // Select the object (this handles attaching controls)
-        objectManager.selectInstance(clickedObject);
-    } else {
-        // Clicked on empty space
+    // Also check if the click was on the gizmo itself (TransformControls handles this internally,
+    // but we don't want to deselect if the click landed on the gizmo)
+    const isClickOnGizmo = controls?.hovered; // Check if gizmo was hovered at the moment of click
+
+    if (intersects.length === 0 && !isClickOnGizmo) {
+        // Clicked on empty space (and not the gizmo)
         objectManager.deselectInstance();
     }
+    // If intersects.length > 0, the click was on an object. Selection was handled by mousemove. Do nothing.
+    // If isClickOnGizmo is true, the click was on the gizmo. TransformControls handles it. Do nothing.
 });
 
 
