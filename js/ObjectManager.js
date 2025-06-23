@@ -6,6 +6,8 @@ import * as dat from 'https://cdn.skypack.dev/dat.gui';
 const defaultSettings = {
     grid: {
         type: 'grid',
+        materialType: 'MeshPhongMaterial', // Added
+        diffuseMap: null, // Added
         audioInfluence: 1.0,
         heightScale: 3,
         colorMapping: 'height', // 'height', 'audio', 'combined', 'frequencyBands'
@@ -19,12 +21,13 @@ const defaultSettings = {
         highColor: new THREE.Color(0xffffff),
         position: new THREE.Vector3(),
         rotation: new THREE.Euler(),
-        autoRotate: false, // Added
-        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added (radians per second)
+        autoRotate: false,
+        rotationSpeed: new THREE.Vector3(0, 0, 0)
         // Note: Grid size/segments are constructor params, not instance settings
     },
     pointcloud: {
         type: 'pointcloud',
+        // materialType and diffuseMap are not applicable to PointsMaterial in the same way
         particleCount: 5000, // Note: Changing this requires recreating the object currently
         particleSize: 0.1,
         distribution: 'sphere', // 'sphere', 'cube', 'plane'
@@ -46,6 +49,8 @@ const defaultSettings = {
     },
     sphere: {
         type: 'sphere',
+        materialType: 'MeshPhongMaterial', // Added
+        diffuseMap: null, // Added
         radius: 5,
         widthSegments: 32,
         heightSegments: 16,
@@ -61,11 +66,13 @@ const defaultSettings = {
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
         rotation: new THREE.Euler(),
-        autoRotate: false, // Added
-        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
+        autoRotate: false,
+        rotationSpeed: new THREE.Vector3(0, 0, 0)
     },
     torus: {
         type: 'torus',
+        materialType: 'MeshPhongMaterial', // Added
+        diffuseMap: null, // Added
         radius: 5,
         tube: 2,
         radialSegments: 16,
@@ -82,11 +89,13 @@ const defaultSettings = {
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
         rotation: new THREE.Euler(),
-        autoRotate: false, // Added
-        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
+        autoRotate: false,
+        rotationSpeed: new THREE.Vector3(0, 0, 0)
     },
     torusknot: {
         type: 'torusknot',
+        materialType: 'MeshPhongMaterial', // Added
+        diffuseMap: null, // Added
         radius: 4,
         tube: 1,
         tubularSegments: 64,
@@ -105,8 +114,8 @@ const defaultSettings = {
         highColor: new THREE.Color(0xffffff), // White
         position: new THREE.Vector3(),
         rotation: new THREE.Euler(),
-        autoRotate: false, // Added
-        rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
+        autoRotate: false,
+        rotationSpeed: new THREE.Vector3(0, 0, 0)
     }
 };
 
@@ -141,10 +150,50 @@ export class ObjectManager {
         this.onDownPosition = new THREE.Vector2();
         this.onUpPosition = new THREE.Vector2();
 
+        this.textureLoader = new THREE.TextureLoader(); // Added for texture loading
+
         // Store bound event listeners for removal
         this.boundOnPointerDown = null;
         this.boundOnPointerMove = null;
         this.boundOnPointerUp = null;
+    }
+
+    _deepCloneSettings(sourceSettings, type) {
+        // Start with a JSON-based deep clone for most properties
+        const newSettings = JSON.parse(JSON.stringify(sourceSettings));
+
+        // Restore THREE.js specific objects
+        // Ensure these properties exist in sourceSettings before copying
+        if (sourceSettings.lowColor) {
+            newSettings.lowColor = new THREE.Color().copy(sourceSettings.lowColor);
+        }
+        if (sourceSettings.midColor) {
+            newSettings.midColor = new THREE.Color().copy(sourceSettings.midColor);
+        }
+        if (sourceSettings.highColor) {
+            newSettings.highColor = new THREE.Color().copy(sourceSettings.highColor);
+        }
+
+        // For new instances, position and rotation are reset.
+        // If we were cloning an *existing* instance and wanted to preserve its transform,
+        // we'd copy sourceSettings.position and sourceSettings.rotation here.
+        // However, addInstance logic re-initializes these based on the object's actual transform later.
+        newSettings.position = new THREE.Vector3(); // Reset for new instance logic in addInstance
+        newSettings.rotation = new THREE.Euler();   // Reset for new instance logic in addInstance
+
+        if (sourceSettings.rotationSpeed) {
+            newSettings.rotationSpeed = new THREE.Vector3().copy(sourceSettings.rotationSpeed);
+        } else {
+            newSettings.rotationSpeed = new THREE.Vector3(); // Default if not present
+        }
+
+        newSettings.type = type; // Ensure type is correctly set
+
+        // For properties that are objects themselves (like rotationSpeed),
+        // JSON.parse(JSON.stringify(sourceSettings.rotationSpeed)) would also work for plain objects.
+        // But explicit THREE.Vector3().copy() is safer and clearer for THREE types.
+
+        return newSettings;
     }
 
     // --- Template Creation ---
@@ -353,24 +402,44 @@ export class ObjectManager {
 
         const sourceSettings = baseInstance ? baseInstance.userData.settings : template.defaultSettings;
 
-        // Deep clone settings
-        const newSettings = JSON.parse(JSON.stringify(sourceSettings));
-        // Restore THREE objects (Color, Vector3, Euler) after stringify/parse
-        newSettings.lowColor = new THREE.Color().copy(sourceSettings.lowColor);
-        newSettings.midColor = new THREE.Color().copy(sourceSettings.midColor);
-        newSettings.highColor = new THREE.Color().copy(sourceSettings.highColor);
-        newSettings.position = new THREE.Vector3(); // Always reset position/rotation for new instance
-        newSettings.rotation = new THREE.Euler();
-        newSettings.rotationSpeed = new THREE.Vector3().copy(sourceSettings.rotationSpeed); // Clone rotation speed
-        newSettings.type = type; // Ensure type is set
+        // Deep clone settings using the new helper function
+        const newSettings = this._deepCloneSettings(sourceSettings, type);
 
-        // Apply specific material properties from settings
-        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
-            material.wireframe = newSettings.wireframe;
+        // Material setup based on settings
+        if (newSettings.materialType === 'MeshStandardMaterial' && type !== 'pointcloud') {
+            const standardMaterial = new THREE.MeshStandardMaterial({
+                vertexColors: material.vertexColors, // Preserve vertex colors
+                wireframe: newSettings.wireframe,
+                side: material.side,
+                // metalness: 0.5, // Default metalness
+                // roughness: 0.5, // Default roughness
+            });
+            material.dispose(); // Dispose the original cloned template material
+            instanceObject.material = standardMaterial;
+        } else if (type !== 'pointcloud') { // MeshPhongMaterial or others
+            // The original 'material' is already assigned to instanceObject.material
+            instanceObject.material.wireframe = newSettings.wireframe;
+        } else { // PointCloud
+            instanceObject.material.size = newSettings.particleSize;
         }
-        if (type === 'pointcloud') {
-            material.size = newSettings.particleSize;
+
+        // Initial diffuse map loading
+        if (newSettings.diffuseMap && type !== 'pointcloud') {
+            this.textureLoader.load(
+                newSettings.diffuseMap,
+                (texture) => { // onLoad
+                    instanceObject.material.map = texture;
+                    instanceObject.material.needsUpdate = true;
+                },
+                undefined, // onProgress (optional)
+                (error) => { // onError
+                    console.error(`Failed to load texture: ${newSettings.diffuseMap}`, error);
+                    // Optionally clear the setting if loading fails to prevent re-attempts
+                    // newSettings.diffuseMap = null;
+                }
+            );
         }
+
 
         instanceObject.userData = {
             settings: newSettings,
@@ -413,9 +482,39 @@ export class ObjectManager {
     createGuiControls(instanceObject, guiFolder) {
         const settings = instanceObject.userData.settings;
         const type = settings.type;
-        const controllers = []; // Local array
+        const controllers = []; // Local array to gather all controllers
 
-        // --- Basic Controls ---
+        // Create common controls shared by all object types
+        this._createCommonGuiControls(instanceObject, guiFolder, settings, controllers);
+
+        // Create type-specific controls
+        switch (type) {
+            case 'grid':
+                this._createGridGuiControls(instanceObject, guiFolder, settings, controllers);
+                break;
+            case 'pointcloud':
+                this._createPointCloudGuiControls(instanceObject, guiFolder, settings, controllers);
+                break;
+            case 'sphere':
+                this._createSphereGuiControls(instanceObject, guiFolder, settings, controllers);
+                break;
+            case 'torus':
+                this._createTorusGuiControls(instanceObject, guiFolder, settings, controllers);
+                break;
+            case 'torusknot':
+                this._createTorusKnotGuiControls(instanceObject, guiFolder, settings, controllers);
+                break;
+            default:
+                console.warn(`No specific GUI controls defined for type: ${type}`);
+        }
+
+        instanceObject.userData.controllers = controllers; // Store all collected controllers
+    }
+
+
+    // --- GUI Control Creation Helpers ---
+    _createCommonGuiControls(instanceObject, guiFolder, settings, controllers) {
+        // Basic Visibility and Audio Interaction
         controllers.push(
             guiFolder.add(settings, 'visible').name("Visible").onChange(val => instanceObject.visible = val),
             guiFolder.add(settings, 'audioInfluence', 0, 2).name("Audio Influence").step(0.1),
@@ -423,82 +522,38 @@ export class ObjectManager {
             guiFolder.add(settings, 'motionInfluenceFactor', 0, 1).name("Motion Influence").step(0.05)
         );
 
-        // --- Material Controls ---
-        if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
-             const material = instanceObject.material;
-             controllers.push(
-                 guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val)
-             );
-        }
-
-        // --- Type-Specific Geometry/Behavior Controls ---
-        if (type === 'grid') {
+        // Material Controls
+        if (['grid', 'sphere', 'torus', 'torusknot'].includes(settings.type)) {
+            const materialFolder = guiFolder.addFolder('Material');
             controllers.push(
-                guiFolder.add(settings, 'heightScale', 0.1, 10).name("Height Scale").step(0.1),
-                guiFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined', 'frequencyBands']).name("Color Mapping"),
-                guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random', 'sineWave', 'checkerboard', 'ripple']).name("Wave Pattern")
+                materialFolder.add(settings, 'materialType', ['MeshPhongMaterial', 'MeshStandardMaterial'])
+                    .name('Material Type')
+                    .onChange(newType => this._updateInstanceMaterial(instanceObject, newType))
             );
-        } else if (type === 'pointcloud') {
-            const material = instanceObject.material;
-             controllers.push(
-                guiFolder.add(settings, 'particleSize', 0.01, 1.0).name("Particle Size").step(0.01).onChange(val => material.size = val),
-                // Note: particleCount requires recreating geometry, complex to handle via GUI for now
-                // guiFolder.add(settings, 'particleCount', 100, 20000).name("Particle Count").step(100).onChange(val => this.recreatePointCloud(instanceObject, val)),
-                guiFolder.add(settings, 'distribution', ['sphere', 'cube', 'plane']).name("Distribution").onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                guiFolder.add(settings, 'distributionScale', 1, 50).name("Dist Scale").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                guiFolder.add(settings, 'displacementScale', 0, 10).name("Displace Scale").step(0.1),
-                guiFolder.add(settings, 'displacementMode', ['radial', 'frequencyBandDisplacement']).name("Displace Mode"),
-                guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands']).name("Color Mapping")
-             );
-        } else if (type === 'sphere') {
-             controllers.push(
-                 guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'widthSegments', 3, 64).name("Width Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'heightSegments', 2, 32).name("Height Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
-                 guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
-             );
-        } else if (type === 'torus') {
-             controllers.push(
-                 guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'radialSegments', 3, 64).name("Radial Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'tubularSegments', 3, 64).name("Tubular Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
-                 guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
-             );
-        } else if (type === 'torusknot') {
-             controllers.push(
-                 guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'tubularSegments', 8, 256).name("Tubular Seg").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'radialSegments', 3, 64).name("Radial Seg").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'p', 1, 10).name("P (windings)").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'q', 1, 10).name("Q (windings)").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
-                 guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
-                 guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
-             );
+            controllers.push(
+                materialFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => {
+                    instanceObject.material.wireframe = val;
+                })
+            );
+            controllers.push(
+                materialFolder.add(settings, 'diffuseMap')
+                    .name('Diffuse Map URL')
+                    .onChange(path => this._loadTextureToMaterial(instanceObject, 'map', path))
+            );
+            // materialFolder.open(); // Optional
         }
 
-        // --- Rotation Controls (Added) ---
+        // Rotation Folder
         const rotationFolder = guiFolder.addFolder('Rotation');
         controllers.push(
-            rotationFolder.add(settings, 'autoRotate').name("Auto Rotate")
-        );
-        // Add separate controls for X, Y, Z rotation speed
-        controllers.push(
-            rotationFolder.add(settings.rotationSpeed, 'x', -Math.PI, Math.PI).name("Speed X").step(0.01)
-        );
-        controllers.push(
-            rotationFolder.add(settings.rotationSpeed, 'y', -Math.PI, Math.PI).name("Speed Y").step(0.01)
-        );
-        controllers.push(
+            rotationFolder.add(settings, 'autoRotate').name("Auto Rotate"),
+            rotationFolder.add(settings.rotationSpeed, 'x', -Math.PI, Math.PI).name("Speed X").step(0.01),
+            rotationFolder.add(settings.rotationSpeed, 'y', -Math.PI, Math.PI).name("Speed Y").step(0.01),
             rotationFolder.add(settings.rotationSpeed, 'z', -Math.PI, Math.PI).name("Speed Z").step(0.01)
         );
-        // rotationFolder.open(); // Optional: Keep rotation folder open by default
+        // rotationFolder.open(); // Optional: Keep open
 
-
-        // --- Common Color Controls ---
+        // Color Controls
         controllers.push(
             guiFolder.addColor(
                 { get lowColor() { return settings.lowColor.getHex() }, set lowColor(v) { settings.lowColor.setHex(v) } }, 'lowColor'
@@ -517,6 +572,186 @@ export class ObjectManager {
 
         instanceObject.userData.controllers = controllers; // Store controllers
     }
+
+
+    // --- GUI Control Creation Helpers ---
+    _createCommonGuiControls(instanceObject, guiFolder, settings, controllers) {
+        // Basic Visibility and Audio Interaction
+        controllers.push(
+            guiFolder.add(settings, 'visible').name("Visible").onChange(val => instanceObject.visible = val),
+            guiFolder.add(settings, 'audioInfluence', 0, 2).name("Audio Influence").step(0.1),
+            guiFolder.add(settings, 'frequencyRange', ['low', 'mid', 'high']).name("Audio Freq Range"),
+            guiFolder.add(settings, 'motionInfluenceFactor', 0, 1).name("Motion Influence").step(0.05)
+        );
+
+        // Material Controls (Wireframe for mesh types)
+        if (['grid', 'sphere', 'torus', 'torusknot'].includes(settings.type)) {
+            const material = instanceObject.material;
+            controllers.push(
+                guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val)
+            );
+        }
+
+        // Rotation Folder
+        const rotationFolder = guiFolder.addFolder('Rotation');
+        controllers.push(
+            rotationFolder.add(settings, 'autoRotate').name("Auto Rotate"),
+            rotationFolder.add(settings.rotationSpeed, 'x', -Math.PI, Math.PI).name("Speed X").step(0.01),
+            rotationFolder.add(settings.rotationSpeed, 'y', -Math.PI, Math.PI).name("Speed Y").step(0.01),
+            rotationFolder.add(settings.rotationSpeed, 'z', -Math.PI, Math.PI).name("Speed Z").step(0.01)
+        );
+        // rotationFolder.open(); // Optional: Keep open
+
+        // Color Controls
+        controllers.push(
+            guiFolder.addColor(
+                { get lowColor() { return settings.lowColor.getHex() }, set lowColor(v) { settings.lowColor.setHex(v) } }, 'lowColor'
+            ).name('Low Color'),
+            guiFolder.addColor(
+                { get midColor() { return settings.midColor.getHex() }, set midColor(v) { settings.midColor.setHex(v) } }, 'midColor'
+            ).name('Mid Color'),
+            guiFolder.addColor(
+                { get highColor() { return settings.highColor.getHex() }, set highColor(v) { settings.highColor.setHex(v) } }, 'highColor'
+            ).name('High Color')
+        );
+
+        // Reset Button
+        settings.resetFunc = () => { this.resetToDefaults(instanceObject); };
+        controllers.push(guiFolder.add(settings, 'resetFunc').name("Reset Settings"));
+    }
+
+    _createGridGuiControls(instanceObject, guiFolder, settings, controllers) {
+        controllers.push(
+            guiFolder.add(settings, 'heightScale', 0.1, 10).name("Height Scale").step(0.1),
+            guiFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined', 'frequencyBands']).name("Color Mapping"),
+            guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random', 'sineWave', 'checkerboard', 'ripple']).name("Wave Pattern")
+        );
+    }
+
+    _createPointCloudGuiControls(instanceObject, guiFolder, settings, controllers) {
+        const material = instanceObject.material;
+        controllers.push(
+            guiFolder.add(settings, 'particleSize', 0.01, 1.0).name("Particle Size").step(0.01).onChange(val => material.size = val),
+            guiFolder.add(settings, 'distribution', ['sphere', 'cube', 'plane']).name("Distribution").onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'distributionScale', 1, 50).name("Dist Scale").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'displacementScale', 0, 10).name("Displace Scale").step(0.1),
+            guiFolder.add(settings, 'displacementMode', ['radial', 'frequencyBandDisplacement']).name("Displace Mode"),
+            guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands']).name("Color Mapping")
+        );
+    }
+
+    _createSphereGuiControls(instanceObject, guiFolder, settings, controllers) {
+        controllers.push(
+            guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'widthSegments', 3, 64).name("Width Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'heightSegments', 2, 32).name("Height Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
+            guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
+        );
+    }
+
+    _createTorusGuiControls(instanceObject, guiFolder, settings, controllers) {
+        controllers.push(
+            guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'radialSegments', 3, 64).name("Radial Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'tubularSegments', 3, 64).name("Tubular Segments").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
+            guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
+        );
+    }
+
+    _createTorusKnotGuiControls(instanceObject, guiFolder, settings, controllers) {
+        controllers.push(
+            guiFolder.add(settings, 'radius', 1, 20).name("Radius").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'tube', 0.1, 10).name("Tube Radius").step(0.1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'tubularSegments', 8, 256).name("Tubular Seg").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'radialSegments', 3, 64).name("Radial Seg").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'p', 1, 10).name("P (windings)").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'q', 1, 10).name("Q (windings)").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+            guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
+            guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
+        );
+    }
+    // --- End GUI Control Creation Helpers ---
+
+    _updateInstanceMaterial(instance, newMaterialType) {
+        if (!instance || !instance.material) return;
+        if (instance.userData.settings.type === 'pointcloud') return; // Not for point clouds
+
+        const oldMaterial = instance.material;
+        const settings = instance.userData.settings;
+
+        let newMaterial;
+
+        // Common properties to preserve
+        const preservedProps = {
+            vertexColors: oldMaterial.vertexColors,
+            wireframe: settings.wireframe, // Get from settings as it's the source of truth
+            side: oldMaterial.side,
+            map: oldMaterial.map, // Preserve existing map
+            // color: oldMaterial.color, // Preserve base color if not using vertex colors
+        };
+
+        if (newMaterialType === 'MeshStandardMaterial') {
+            newMaterial = new THREE.MeshStandardMaterial(preservedProps);
+            // Add/set any specific MeshStandardMaterial defaults if needed
+            // newMaterial.metalness = 0.5; // Example
+            // newMaterial.roughness = 0.5; // Example
+        } else { // Default to MeshPhongMaterial
+            newMaterial = new THREE.MeshPhongMaterial(preservedProps);
+            // Add/set any specific MeshPhongMaterial defaults if needed
+        }
+
+        // If the old material had a color property and wasn't using vertex colors, apply it.
+        // Note: vertexColors takes precedence if enabled.
+        if (oldMaterial.color && !preservedProps.vertexColors) {
+            newMaterial.color.copy(oldMaterial.color);
+        }
+
+
+        instance.material = newMaterial;
+        oldMaterial.dispose();
+        settings.materialType = newMaterialType; // Update settings
+        console.log(`Instance ${instance.uuid} material updated to ${newMaterialType}`);
+    }
+
+    _loadTextureToMaterial(instance, mapType, path) {
+        if (!instance || !instance.material) return;
+        if (instance.userData.settings.type === 'pointcloud') return; // Not for point clouds
+
+        const material = instance.material;
+        const settings = instance.userData.settings;
+
+        // Dispose old texture if it exists for this mapType
+        if (material[mapType] && material[mapType].isTexture) {
+            material[mapType].dispose();
+        }
+        material[mapType] = null; // Clear it first
+
+        if (path && typeof path === 'string' && path.trim() !== '') {
+            this.textureLoader.load(
+                path,
+                (texture) => { // onLoad
+                    material[mapType] = texture;
+                    material.needsUpdate = true;
+                    if (mapType === 'map') settings.diffuseMap = path; // Update setting
+                    // Add similar updates for normalMap, emissiveMap etc. if those settings exist
+                    console.log(`Texture "${path}" loaded to ${mapType} for instance ${instance.uuid}`);
+                },
+                undefined, // onProgress
+                (error) => { // onError
+                    console.error(`Failed to load texture "${path}":`, error);
+                    if (mapType === 'map') settings.diffuseMap = null; // Clear setting on error
+                }
+            );
+        } else {
+            // Path is empty, ensure map is null and update setting
+            if (mapType === 'map') settings.diffuseMap = null;
+            material.needsUpdate = true; // Update material even if map is removed
+        }
+    }
+
 
     resetToDefaults(instance) {
         if (!instance) return;

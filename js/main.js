@@ -98,11 +98,20 @@ composer.addPass(fxaaPass);
 
 
 // --- Lighting ---
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4); // Softer ambient
 scene.add(ambientLight);
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-directionalLight.position.set(5, 10, 7);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); // Slightly less intense
+directionalLight.position.set(5, 10, 7.5);
 scene.add(directionalLight);
+
+// Additional Point Lights for MeshStandardMaterial
+const pointLight1 = new THREE.PointLight(0xffaa44, 0.7, 50, 2); // Warm light
+pointLight1.position.set(-10, 15, 10);
+scene.add(pointLight1);
+
+const pointLight2 = new THREE.PointLight(0x44aaff, 0.7, 50, 2); // Cool light
+pointLight2.position.set(10, 15, -10);
+scene.add(pointLight2);
 
 // --- Initial State ---
 camera.position.set(GRID_SIZE * 0.7, GRID_SIZE * 0.7, GRID_SIZE * 1.2); // Adjust camera based on grid size, pull back slightly
@@ -200,8 +209,38 @@ globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onCh
 globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
     .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
-globalFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate"); // Renamed for clarity
-globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val); // Renamed for clarity
+globalFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate");
+globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
+
+// Lighting Controls in Global Folder
+const lightingFolder = globalFolder.addFolder('Lighting');
+lightingFolder.add(ambientLight, 'intensity', 0, 2).name('Ambient Intensity');
+const dirLightFolder = lightingFolder.addFolder('Directional Light');
+dirLightFolder.add(directionalLight, 'visible');
+dirLightFolder.add(directionalLight, 'intensity', 0, 2);
+dirLightFolder.add(directionalLight.position, 'x', -20, 20).name('Pos X');
+dirLightFolder.add(directionalLight.position, 'y', -20, 20).name('Pos Y');
+dirLightFolder.add(directionalLight.position, 'z', -20, 20).name('Pos Z');
+// dirLightFolder.open();
+
+const pLight1Folder = lightingFolder.addFolder('Point Light 1 (Warm)');
+pLight1Folder.add(pointLight1, 'visible');
+pLight1Folder.add(pointLight1, 'intensity', 0, 2);
+pLight1Folder.add(pointLight1.position, 'x', -30, 30).name('Pos X');
+pLight1Folder.add(pointLight1.position, 'y', -30, 30).name('Pos Y');
+pLight1Folder.add(pointLight1.position, 'z', -30, 30).name('Pos Z');
+// pLight1Folder.open();
+
+const pLight2Folder = lightingFolder.addFolder('Point Light 2 (Cool)');
+pLight2Folder.add(pointLight2, 'visible');
+pLight2Folder.add(pointLight2, 'intensity', 0, 2);
+pLight2Folder.add(pointLight2.position, 'x', -30, 30).name('Pos X');
+pLight2Folder.add(pointLight2.position, 'y', -30, 30).name('Pos Y');
+pLight2Folder.add(pointLight2.position, 'z', -30, 30).name('Pos Z');
+// pLight2Folder.open();
+
+// lightingFolder.open(); // Optional: Keep lighting folder open by default
+
 
 // Audio & Camera Folder
 const audioCameraFolder = gui.addFolder('Audio & Camera');
