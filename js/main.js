@@ -183,38 +183,6 @@ const ScanlinesShader = {
 const scanlinesPass = new ShaderPass(ScanlinesShader);
 composer.addPass(scanlinesPass);
 
-// Vignette Shader
-const VignetteShader = {
-    uniforms: {
-        tDiffuse: { value: null },
-        offset: { value: 1.0 },   // Controls how far vignette reaches (1.0 = edges)
-        darkness: { value: 1.0 }  // Controls how dark the vignette is (1.0 = fully dark)
-    },
-    vertexShader: `
-        varying vec2 vUv;
-        void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-    `,
-    fragmentShader: `
-        uniform sampler2D tDiffuse;
-        uniform float offset;
-        uniform float darkness;
-        varying vec2 vUv;
-        void main() {
-            vec2 uv = (vUv - vec2(0.5)) * vec2(offset);
-            float dist = length(uv); // Distance from center
-            float vig = smoothstep(0.8, darkness * 0.799, dist); // Create smooth falloff
-            vec4 color = texture2D(tDiffuse, vUv);
-            color.rgb *= (1.0 - vig); // Apply vignette
-            gl_FragColor = color;
-        }
-    `
-};
-const vignettePass = new ShaderPass(VignetteShader);
-composer.addPass(vignettePass);
-
 
 // Screen Distortion Shader (Barrel/Pinch)
 const ScreenDistortionShader = {
@@ -314,9 +282,6 @@ const settings = {
     scanlinesIntensity: scanlinesPass.uniforms.intensity.value,
     scanlinesCount: scanlinesPass.uniforms.count.value,
     scanlinesSpeed: scanlinesPass.uniforms.speed.value,
-    vignetteEnabled: true,
-    vignetteOffset: vignettePass.uniforms.offset.value,
-    vignetteDarkness: vignettePass.uniforms.darkness.value,
     // Screen Distortion Settings
     screenDistortionEnabled: false, // Disabled by default
     screenDistortionType: 'None', // 'None', 'Barrel', 'Pinch' (Wave could be added later)
@@ -693,13 +658,6 @@ scanlinesFolder.add(settings, 'scanlinesIntensity', 0, 1).step(0.01).name("Inten
 scanlinesFolder.add(settings, 'scanlinesCount', 50, 1000).step(10).name("Count").onChange(val => scanlinesPass.uniforms.count.value = val);
 scanlinesFolder.add(settings, 'scanlinesSpeed', 0, 1).step(0.01).name("Speed").onChange(val => scanlinesPass.uniforms.speed.value = val);
 // scanlinesFolder.open();
-
-// Vignette Controls
-const vignetteFolder = ppFolder.addFolder('Vignette');
-vignetteFolder.add(settings, 'vignetteEnabled').name("Enable").onChange(val => vignettePass.enabled = val);
-vignetteFolder.add(settings, 'vignetteOffset', 0.1, 3).step(0.1).name("Offset").onChange(val => vignettePass.uniforms.offset.value = val);
-vignetteFolder.add(settings, 'vignetteDarkness', 0.1, 2).step(0.1).name("Darkness").onChange(val => vignettePass.uniforms.darkness.value = val);
-// vignetteFolder.open();
 
 
 // Instance Management Folder
