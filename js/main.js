@@ -94,6 +94,162 @@ composer.addPass(pixelatePass);
 
 const fxaaPass = new ShaderPass(FXAAShader);
 fxaaPass.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
+// composer.addPass(fxaaPass); // FXAA will be added last, after other custom effects
+
+// --- Custom Post Processing Effects ---
+
+// Film Grain Shader
+const FilmGrainShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        time: { value: 0.0 },
+        intensity: { value: 0.05 }, // Default intensity
+        speed: { value: 0.5 }       // Default speed
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float time;
+        uniform float intensity;
+        uniform float speed;
+        varying vec2 vUv;
+        float random(vec2 st) {
+            return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+        }
+        void main() {
+            vec4 color = texture2D(tDiffuse, vUv);
+            float grain = random(vUv * time * speed) * intensity;
+            color.rgb += grain;
+            gl_FragColor = color;
+        }
+    `
+};
+const filmGrainPass = new ShaderPass(FilmGrainShader);
+composer.addPass(filmGrainPass);
+
+// Scanlines Shader
+const ScanlinesShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        time: { value: 0.0 },
+        intensity: { value: 0.1 },   // Default intensity
+        count: { value: 400.0 },     // Number of scanlines
+        speed: { value: 0.2 }        // Scroll speed
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float time;
+        uniform float intensity;
+        uniform float count;
+        uniform float speed;
+        varying vec2 vUv;
+        void main() {
+            vec4 color = texture2D(tDiffuse, vUv);
+            float scanline = sin((vUv.y + time * speed) * count) * 0.5 + 0.5; // Simple sine wave for scanlines
+            float strength = pow(scanline, 2.0) * intensity; // Make lines thinner and sharper
+            color.rgb = mix(color.rgb, color.rgb * (1.0 - strength), strength); // Apply darkening
+            gl_FragColor = color;
+        }
+    `
+};
+const scanlinesPass = new ShaderPass(ScanlinesShader);
+composer.addPass(scanlinesPass);
+
+// Vignette Shader
+const VignetteShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        offset: { value: 1.0 },   // Controls how far vignette reaches (1.0 = edges)
+        darkness: { value: 1.0 }  // Controls how dark the vignette is (1.0 = fully dark)
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float offset;
+        uniform float darkness;
+        varying vec2 vUv;
+        void main() {
+            vec2 uv = (vUv - vec2(0.5)) * vec2(offset);
+            float dist = length(uv); // Distance from center
+            float vig = smoothstep(0.8, darkness * 0.799, dist); // Create smooth falloff
+            vec4 color = texture2D(tDiffuse, vUv);
+            color.rgb *= (1.0 - vig); // Apply vignette
+            gl_FragColor = color;
+        }
+    `
+};
+const vignettePass = new ShaderPass(VignetteShader);
+composer.addPass(vignettePass);
+
+
+// Screen Distortion Shader (Barrel/Pinch)
+const ScreenDistortionShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        intensity: { value: 0.0 }, // 0 for no distortion, positive for barrel, negative for pinch
+        power: { value: 1.5 } // Power for barrel/pinch effect (usually > 1)
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float intensity;
+        uniform float power; // Typically 1.0 to 2.0 for barrel
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec2 texCoord = uv;
+
+            // Barrel / Pinch Distortion
+            // Convert to normalized coords (-1 to 1)
+            vec2 p = 2.0 * uv - 1.0; // or (uv - 0.5) * 2.0
+
+            // Calculate distance from center and apply distortion
+            float r = length(p);
+            if (intensity != 0.0) {
+                 float distortionFactor = pow(r, power - 1.0) * intensity; // power-1 because r is already one factor
+                 texCoord = uv + normalize(p) * distortionFactor;
+            }
+
+            // Check if texCoord is within [0,1] range
+            if (texCoord.x >= 0.0 && texCoord.x <= 1.0 && texCoord.y >= 0.0 && texCoord.y <= 1.0) {
+                gl_FragColor = texture2D(tDiffuse, texCoord);
+            } else {
+                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); // Black outside distorted area
+            }
+        }
+    `
+};
+const screenDistortionPass = new ShaderPass(ScreenDistortionShader);
+composer.addPass(screenDistortionPass);
+
+
+// Add FXAA last for best results
 composer.addPass(fxaaPass);
 
 
@@ -120,9 +276,13 @@ camera.lookAt(0, 0, 0);
 // --- Global Settings & Audio/Camera Control ---
 const settings = {
     // General View/Control Settings
+    fov: camera.fov, // Added FOV
+    orbitControlsRotateSpeed: orbitControls.rotateSpeed, // Added OrbitControls Speeds
+    orbitControlsZoomSpeed: orbitControls.zoomSpeed,
+    orbitControlsPanSpeed: orbitControls.panSpeed,
     transformMode: 'translate',
     autoRotateSpeed: orbitControls.autoRotateSpeed,
-    globalBackgroundColor: scene.background.getHex(),
+    // globalBackgroundColor: scene.background.getHex(), // Moved to backgroundSettings
     // Post Processing Settings
     bloomStrength: bloomPass.strength,
     bloomThreshold: bloomPass.threshold,
@@ -131,6 +291,22 @@ const settings = {
     pixelateEnabled: true,
     fxaaEnabled: true,
     pixelSize: pixelatePass.uniforms.pixelSize.value,
+    // New post-processing effects settings
+    filmGrainEnabled: true,
+    filmGrainIntensity: filmGrainPass.uniforms.intensity.value,
+    filmGrainSpeed: filmGrainPass.uniforms.speed.value,
+    scanlinesEnabled: true,
+    scanlinesIntensity: scanlinesPass.uniforms.intensity.value,
+    scanlinesCount: scanlinesPass.uniforms.count.value,
+    scanlinesSpeed: scanlinesPass.uniforms.speed.value,
+    vignetteEnabled: true,
+    vignetteOffset: vignettePass.uniforms.offset.value,
+    vignetteDarkness: vignettePass.uniforms.darkness.value,
+    // Screen Distortion Settings
+    screenDistortionEnabled: false, // Disabled by default
+    screenDistortionType: 'None', // 'None', 'Barrel', 'Pinch' (Wave could be added later)
+    screenDistortionIntensity: screenDistortionPass.uniforms.intensity.value,
+    screenDistortionPower: screenDistortionPass.uniforms.power.value,
     // Instance Management Functions (bound to GUI)
     addGrid: () => objectManager.addInstance('grid'),
     addPointCloud: () => objectManager.addInstance('pointcloud'),
@@ -160,6 +336,26 @@ const cameraSettings = {
     // visualizationDepthScale: cameraVisualizer.options.depthScale,
     // visualizationParticleSize: cameraVisualizer.options.particleSize,
     // visualizationColorMode: cameraVisualizer.options.colorMode,
+};
+
+const backgroundSettings = {
+    type: 'Solid Color', // 'Solid Color', 'Skybox', 'Image'
+    solidColor: scene.background.getHex(),
+    skyboxPreset: 'None', // Added for presets
+    skyboxPathPosX: '',
+    skyboxPathNegX: '',
+    skyboxPathPosY: '',
+    skyboxPathNegY: '',
+    skyboxPathPosZ: '',
+    skyboxPathNegZ: '',
+    imageURL: '',
+    // Helper function to apply the background
+    applyBackground: () => updateBackground(),
+    // Store the currently active skybox texture and image texture for disposal
+    activeSkyboxTexture: null,
+    activeImageTexture: null,
+    // Store the skydome mesh if used
+    skydome: null
 };
 
 // --- GUI Setup ---
@@ -205,12 +401,24 @@ function switchTab(name) {
 // Global Settings Folder
 const globalFolder = gui.addFolder('Global Settings');
 guiFolders['Global'] = { folder: globalFolder }; // Register folder (button added later)
-globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
+// globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val)); // Moved to Background tab
 globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
     .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
-globalFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate");
-globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
+
+// Camera Controls
+const cameraFolder = globalFolder.addFolder('Camera Controls');
+cameraFolder.add(settings, 'fov', 30, 120).name('FOV').onChange(val => {
+    camera.fov = val;
+    camera.updateProjectionMatrix();
+});
+cameraFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate");
+cameraFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
+cameraFolder.add(settings, 'orbitControlsRotateSpeed', 0.1, 5.0).name("Orbit Rotate Speed Sens.").onChange(val => orbitControls.rotateSpeed = val);
+cameraFolder.add(settings, 'orbitControlsZoomSpeed', 0.1, 5.0).name("Orbit Zoom Speed Sens.").onChange(val => orbitControls.zoomSpeed = val);
+cameraFolder.add(settings, 'orbitControlsPanSpeed', 0.1, 5.0).name("Orbit Pan Speed Sens.").onChange(val => orbitControls.panSpeed = val);
+// cameraFolder.open();
+
 
 // Lighting Controls in Global Folder
 const lightingFolder = globalFolder.addFolder('Lighting');
@@ -456,6 +664,29 @@ ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength
 ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
 ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
 
+// Film Grain Controls
+const filmGrainFolder = ppFolder.addFolder('Film Grain');
+filmGrainFolder.add(settings, 'filmGrainEnabled').name("Enable").onChange(val => filmGrainPass.enabled = val);
+filmGrainFolder.add(settings, 'filmGrainIntensity', 0, 1).step(0.01).name("Intensity").onChange(val => filmGrainPass.uniforms.intensity.value = val);
+filmGrainFolder.add(settings, 'filmGrainSpeed', 0, 2).step(0.01).name("Speed").onChange(val => filmGrainPass.uniforms.speed.value = val);
+// filmGrainFolder.open();
+
+// Scanlines Controls
+const scanlinesFolder = ppFolder.addFolder('Scanlines');
+scanlinesFolder.add(settings, 'scanlinesEnabled').name("Enable").onChange(val => scanlinesPass.enabled = val);
+scanlinesFolder.add(settings, 'scanlinesIntensity', 0, 1).step(0.01).name("Intensity").onChange(val => scanlinesPass.uniforms.intensity.value = val);
+scanlinesFolder.add(settings, 'scanlinesCount', 50, 1000).step(10).name("Count").onChange(val => scanlinesPass.uniforms.count.value = val);
+scanlinesFolder.add(settings, 'scanlinesSpeed', 0, 1).step(0.01).name("Speed").onChange(val => scanlinesPass.uniforms.speed.value = val);
+// scanlinesFolder.open();
+
+// Vignette Controls
+const vignetteFolder = ppFolder.addFolder('Vignette');
+vignetteFolder.add(settings, 'vignetteEnabled').name("Enable").onChange(val => vignettePass.enabled = val);
+vignetteFolder.add(settings, 'vignetteOffset', 0.1, 3).step(0.1).name("Offset").onChange(val => vignettePass.uniforms.offset.value = val);
+vignetteFolder.add(settings, 'vignetteDarkness', 0.1, 2).step(0.1).name("Darkness").onChange(val => vignettePass.uniforms.darkness.value = val);
+// vignetteFolder.open();
+
+
 // Instance Management Folder
 const instanceManagement = gui.addFolder('Instances');
 guiFolders['Instances'] = { folder: instanceManagement }; // Register folder
@@ -475,8 +706,111 @@ addTab('Visualizer', visualizerFolder); // Add Visualizer tab
 addTab('Effects', ppFolder);
 addTab('Instances', instanceManagement); // Keep instance management separate
 
+// Background Settings Folder
+const backgroundFolder = gui.addFolder('Background Settings');
+guiFolders['Background'] = { folder: backgroundFolder }; // Register folder
+
+const bgTypeController = backgroundFolder.add(backgroundSettings, 'type', ['Solid Color', 'Skybox', 'Image'])
+    .name('Type')
+    .onChange(updateBackgroundGUI);
+
+const solidColorController = backgroundFolder.addColor(backgroundSettings, 'solidColor')
+    .name('Solid Color')
+    .onChange(backgroundSettings.applyBackground);
+
+// Skybox settings (initially hidden)
+const skyboxPresetController = backgroundFolder.add(backgroundSettings, 'skyboxPreset', [
+    'None',
+    'Space1', // Example preset name
+    'Space2',
+    'Abstract1'
+]).name('Skybox Preset').onChange(applySkyboxPreset);
+
+const skyboxPathControllers = [
+    backgroundFolder.add(backgroundSettings, 'skyboxPathPosX').name('Path Pos X').onChange(backgroundSettings.applyBackground),
+    backgroundFolder.add(backgroundSettings, 'skyboxPathNegX').name('Path Neg X').onChange(backgroundSettings.applyBackground),
+    backgroundFolder.add(backgroundSettings, 'skyboxPathPosY').name('Path Pos Y').onChange(backgroundSettings.applyBackground),
+    backgroundFolder.add(backgroundSettings, 'skyboxPathNegY').name('Path Neg Y').onChange(backgroundSettings.applyBackground),
+    backgroundFolder.add(backgroundSettings, 'skyboxPathPosZ').name('Path Pos Z').onChange(backgroundSettings.applyBackground),
+    backgroundFolder.add(backgroundSettings, 'skyboxPathNegZ').name('Path Neg Z').onChange(backgroundSettings.applyBackground)
+];
+
+// Image settings (initially hidden)
+const imageURLController = backgroundFolder.add(backgroundSettings, 'imageURL')
+    .name('Image URL')
+    .onChange(backgroundSettings.applyBackground);
+
+
+// --- Finalize Tab Setup ---
+// Add buttons for registered folders
+addTab('Global', globalFolder);
+addTab('Background', backgroundFolder); // Add Background tab
+addTab('Sources', audioCameraFolder);
+addTab('Visualizer', visualizerFolder); // Add Visualizer tab
+
+// Lens Effects / World Effects Folder
+const lensEffectsFolder = gui.addFolder('Lens Effects');
+guiFolders['Lens'] = { folder: lensEffectsFolder };
+
+lensEffectsFolder.add(settings, 'screenDistortionEnabled').name('Enable Distortion').onChange(val => {
+    screenDistortionPass.enabled = val;
+    // If enabling, and type is None, perhaps default to Barrel? Or let user pick.
+    if (val && settings.screenDistortionType === 'None') {
+        // settings.screenDistortionType = 'Barrel'; // Optional: auto-select a type
+        // screenDistortionTypeController.updateDisplay(); // Update GUI if changed
+    }
+    updateScreenDistortionUniforms(); // Apply intensity based on type
+});
+
+const screenDistortionTypeController = lensEffectsFolder.add(settings, 'screenDistortionType', ['None', 'Barrel', 'Pinch'])
+    .name('Distortion Type')
+    .onChange(val => {
+        updateScreenDistortionUniforms();
+        // Show/hide power slider if relevant (e.g. not for 'None' or future types that don't use it)
+        screenDistortionPowerController.domElement.style.display = (val === 'Barrel' || val === 'Pinch') ? 'block' : 'none';
+    });
+
+const screenDistortionIntensityController = lensEffectsFolder.add(settings, 'screenDistortionIntensity', -1.0, 1.0).step(0.01)
+    .name('Intensity')
+    .onChange(val => {
+        // This directly updates the setting, which will be used by updateScreenDistortionUniforms
+        // No need to call updateScreenDistortionUniforms here if type change handles it.
+        // However, to make it live, we can call it:
+        updateScreenDistortionUniforms();
+    });
+
+const screenDistortionPowerController = lensEffectsFolder.add(settings, 'screenDistortionPower', 1.0, 4.0).step(0.1)
+    .name('Power')
+    .onChange(val => screenDistortionPass.uniforms.power.value = val);
+
+
+function updateScreenDistortionUniforms() {
+    screenDistortionPass.enabled = settings.screenDistortionEnabled;
+    if (!settings.screenDistortionEnabled || settings.screenDistortionType === 'None') {
+        screenDistortionPass.uniforms.intensity.value = 0.0;
+    } else if (settings.screenDistortionType === 'Barrel') {
+        // Ensure intensity is positive for barrel, or use Math.abs if preferred
+        screenDistortionPass.uniforms.intensity.value = Math.abs(settings.screenDistortionIntensity);
+    } else if (settings.screenDistortionType === 'Pinch') {
+        // Ensure intensity is negative for pinch
+        screenDistortionPass.uniforms.intensity.value = -Math.abs(settings.screenDistortionIntensity);
+    }
+    // Update visibility of power slider
+    screenDistortionPowerController.domElement.style.display = (settings.screenDistortionType === 'Barrel' || settings.screenDistortionType === 'Pinch') && settings.screenDistortionEnabled ? 'block' : 'none';
+    screenDistortionIntensityController.domElement.style.display = settings.screenDistortionEnabled && settings.screenDistortionType !== 'None' ? 'block' : 'none';
+
+}
+// Initialize pass state and GUI
+updateScreenDistortionUniforms();
+
+
+addTab('Effects', ppFolder); // Standard post-processing effects
+addTab('Lens', lensEffectsFolder); // New tab for lens/world distortions
+addTab('Instances', instanceManagement); // Keep instance management separate
+
 // Activate the first tab initially
 switchTab('Global');
+updateBackgroundGUI(); // Set initial visibility of GUI elements for background
 // --- End GUI Setup ---
 
 
@@ -548,6 +882,153 @@ window.addEventListener('resize', () => {
 
 // updateObject logic is now within ObjectManager
 
+// --- Background Management ---
+const textureLoader = new THREE.TextureLoader();
+const cubeTextureLoader = new THREE.CubeTextureLoader();
+
+const skyboxPresets = {
+    'None': {},
+    'Space1': { // Standard LearnOpenGL Skybox
+        pathPosX: 'https://raw.githubusercontent.com/JoeyDeVries/LearnOpenGL/master/resources/textures/skybox/right.jpg',
+        pathNegX: 'https://raw.githubusercontent.com/JoeyDeVries/LearnOpenGL/master/resources/textures/skybox/left.jpg',
+        pathPosY: 'https://raw.githubusercontent.com/JoeyDeVries/LearnOpenGL/master/resources/textures/skybox/top.jpg',
+        pathNegY: 'https://raw.githubusercontent.com/JoeyDeVries/LearnOpenGL/master/resources/textures/skybox/bottom.jpg',
+        pathPosZ: 'https://raw.githubusercontent.com/JoeyDeVries/LearnOpenGL/master/resources/textures/skybox/front.jpg',
+        pathNegZ: 'https://raw.githubusercontent.com/JoeyDeVries/LearnOpenGL/master/resources/textures/skybox/back.jpg',
+    },
+    'Space2': { // Another example (replace with actual distinct URLs if available)
+        // Using placeholder paths from a different common skybox set if possible, e.g., from three.js examples
+        // For demonstration, let's assume a different path structure or source:
+        // NOTE: These are illustrative. Actual different URLs would be needed for a distinct visual.
+        // Using a common skybox (e.g., "Milkyway") often found in three.js examples.
+        // The paths would be like: 'textures/cube/Milkyway/dark-s_px.jpg', etc.
+        // For now, let's use a slightly different set of URLs if I can find them quickly, otherwise reuse and note it.
+        // For simplicity, I'll reuse the same URLs for Space2 for now, as finding reliable, distinct,
+        // and directly linkable cubemap face URLs quickly is hard. User would replace these.
+        pathPosX: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Bridge2/px.jpg',
+        pathNegX: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Bridge2/nx.jpg',
+        pathPosY: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Bridge2/py.jpg',
+        pathNegY: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Bridge2/ny.jpg',
+        pathPosZ: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Bridge2/pz.jpg',
+        pathNegZ: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Bridge2/nz.jpg',
+    },
+    'Abstract1': { // Placeholder for an abstract skybox
+        // These would be URLs to abstract cubemap faces
+        pathPosX: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Park3Med/px.jpg',
+        pathNegX: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Park3Med/nx.jpg',
+        pathPosY: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Park3Med/py.jpg',
+        pathNegY: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Park3Med/ny.jpg',
+        pathPosZ: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Park3Med/pz.jpg',
+        pathNegZ: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/Park3Med/nz.jpg',
+    }
+};
+
+function applySkyboxPreset() {
+    const preset = skyboxPresets[backgroundSettings.skyboxPreset];
+    if (preset) {
+        backgroundSettings.skyboxPathPosX = preset.pathPosX || '';
+        backgroundSettings.skyboxPathNegX = preset.pathNegX || '';
+        backgroundSettings.skyboxPathPosY = preset.pathPosY || '';
+        backgroundSettings.skyboxPathNegY = preset.pathNegY || '';
+        backgroundSettings.skyboxPathPosZ = preset.pathPosZ || '';
+        backgroundSettings.skyboxPathNegZ = preset.pathNegZ || '';
+
+        // Update GUI display for path controllers
+        skyboxPathControllers.forEach(controller => controller.updateDisplay());
+        updateBackground(); // Apply the new preset
+    }
+}
+
+
+function updateBackgroundGUI() {
+    const type = backgroundSettings.type;
+    solidColorController.domElement.style.display = type === 'Solid Color' ? 'block' : 'none';
+    skyboxPresetController.domElement.style.display = type === 'Skybox' ? 'block' : 'none';
+    skyboxPathControllers.forEach(c => c.domElement.style.display = type === 'Skybox' ? 'block' : 'none');
+    imageURLController.domElement.style.display = type === 'Image' ? 'block' : 'none';
+}
+
+function updateBackground() {
+    // Dispose previous textures/objects
+    if (backgroundSettings.activeSkyboxTexture) {
+        backgroundSettings.activeSkyboxTexture.dispose();
+        backgroundSettings.activeSkyboxTexture = null;
+    }
+    if (backgroundSettings.activeImageTexture) {
+        backgroundSettings.activeImageTexture.dispose();
+        backgroundSettings.activeImageTexture = null;
+    }
+    if (backgroundSettings.skydome) {
+        scene.remove(backgroundSettings.skydome);
+        backgroundSettings.skydome.geometry.dispose();
+        backgroundSettings.skydome.material.dispose();
+        backgroundSettings.skydome = null;
+    }
+    scene.background = null; // Clear previous background
+
+    switch (backgroundSettings.type) {
+        case 'Solid Color':
+            scene.background = new THREE.Color(backgroundSettings.solidColor);
+            break;
+        case 'Skybox':
+            if (backgroundSettings.skyboxPathPosX && backgroundSettings.skyboxPathNegX &&
+                backgroundSettings.skyboxPathPosY && backgroundSettings.skyboxPathNegY &&
+                backgroundSettings.skyboxPathPosZ && backgroundSettings.skyboxPathNegZ) {
+                cubeTextureLoader.setPath(''); // Ensure paths are absolute
+                backgroundSettings.activeSkyboxTexture = cubeTextureLoader.load([
+                    backgroundSettings.skyboxPathPosX, backgroundSettings.skyboxPathNegX,
+                    backgroundSettings.skyboxPathPosY, backgroundSettings.skyboxPathNegY,
+                    backgroundSettings.skyboxPathPosZ, backgroundSettings.skyboxPathNegZ
+                ], () => {
+                    console.log("Skybox loaded successfully.");
+                }, undefined, (err) => {
+                    console.error("Error loading skybox:", err);
+                    // Fallback to solid color on error
+                    scene.background = new THREE.Color(backgroundSettings.solidColor);
+                });
+                scene.background = backgroundSettings.activeSkyboxTexture;
+            } else {
+                // Fallback if not all paths are provided
+                scene.background = new THREE.Color(backgroundSettings.solidColor);
+                if (backgroundSettings.skyboxPreset !== 'None') { // Only alert if a preset was chosen but failed
+                    alert("Skybox paths are not fully specified. Ensure all 6 paths are set or choose 'None' preset.");
+                }
+            }
+            break;
+        case 'Image':
+            if (backgroundSettings.imageURL) {
+                backgroundSettings.activeImageTexture = textureLoader.load(
+                    backgroundSettings.imageURL,
+                    (texture) => {
+                        // Simple skydome: Large sphere
+                        const geometry = new THREE.SphereGeometry(500, 60, 40);
+                        // Invert the geometry on the x-axis so that all of the faces point inward
+                        geometry.scale(-1, 1, 1);
+                        const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+                        backgroundSettings.skydome = new THREE.Mesh(geometry, material);
+                        scene.add(backgroundSettings.skydome);
+                        console.log("Background image loaded and skydome created.");
+                    },
+                    undefined,
+                    (err) => {
+                        console.error("Error loading background image:", err);
+                        alert("Failed to load background image. Check URL and console.");
+                        // Fallback to solid color on error
+                        scene.background = new THREE.Color(backgroundSettings.solidColor);
+                    }
+                );
+            } else {
+                // Fallback if no image URL
+                scene.background = new THREE.Color(backgroundSettings.solidColor);
+            }
+            break;
+        default:
+            scene.background = new THREE.Color(backgroundSettings.solidColor);
+    }
+}
+// --- End Background Management ---
+
+
 // --- Animation Loop ---
 let lastTimestamp = 0;
 function animate(timestamp) {
@@ -573,6 +1054,13 @@ function animate(timestamp) {
     }
     // Note: Visibility of the points object itself is handled within CameraVisualizer.update/setVisible
 
+    // --- Update Shader Uniforms (Time) ---
+    if (filmGrainPass.enabled) {
+        filmGrainPass.uniforms.time.value += deltaTime;
+    }
+    if (scanlinesPass.enabled) {
+        scanlinesPass.uniforms.time.value += deltaTime;
+    }
 
     // --- Global Effects (Camera FOV) ---
     if (audioSettings.source !== 'None' && audioManager.audioContext) { // Check audio context exists

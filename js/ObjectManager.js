@@ -2,6 +2,96 @@ import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import * as dat from 'https://cdn.skypack.dev/dat.gui';
 
+
+// --- Toon Shader Definition ---
+const ToonShader = {
+    uniforms: {
+        // Uniforms from MeshPhongMaterial that might be useful + custom ones
+        'diffuse': { value: new THREE.Color(0xffffff) }, // Base color of the object
+        'map': { value: null }, // Texture map
+        'toonLevels': { value: 3 }, // Number of distinct shades
+
+        // Lighting uniforms will be automatically provided by Three.js when 'lights: true'
+        // 'ambientLightColor': { value: new THREE.Color(0x404040) }, // Provided by Three.js as ambientLightColor
+        // For directional lights, Three.js provides an array:
+        // uniform DirectionalLight directionalLights[NUM_DIR_LIGHTS];
+        // struct DirectionalLight {
+        //     vec3 direction;
+        //     vec3 color;
+        // };
+        // We'll assume the first directional light is the primary one for toon shading.
+
+        // Outline (Basic - not fully implemented in this shader, more for parameter storage)
+        // 'outlineColor': { value: new THREE.Color(0x000000) },
+        // 'outlineWidth': { value: 0.02 },
+    },
+    vertexShader: `
+        varying vec3 vNormal;
+        varying vec2 vUv;
+        varying vec3 vViewPosition; // Corrected: position of the vertex in view space
+
+        void main() {
+            vUv = uv;
+            vNormal = normalize(normalMatrix * normal);
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            vViewPosition = -mvPosition.xyz; // Position of vertex in view coords
+            gl_Position = projectionMatrix * mvPosition;
+        }
+    `,
+    fragmentShader: `
+        uniform vec3 diffuse;
+        uniform sampler2D map;
+        uniform bool useMap; // Boolean to control texture usage, set based on settings.diffuseMap
+        uniform float toonLevels;
+
+        // Access Three.js built-in lighting uniforms
+        // uniform vec3 ambientLightColor; // Already available globally from Three.js if lights = true
+
+        // Directional light struct (provided by Three.js when lights: true)
+        struct DirectionalLight {
+            vec3 direction; // Already in view space
+            vec3 color;
+        };
+        uniform DirectionalLight directionalLights[NUM_DIR_LIGHTS]; // NUM_DIR_LIGHTS is defined by Three.js
+
+        varying vec3 vNormal;
+        varying vec2 vUv;
+        varying vec3 vViewPosition; // Position of fragment in view space
+
+        void main() {
+            // Base color from texture or uniform
+            vec4 baseColor = vec4(diffuse, 1.0);
+            if (useMap) {
+                 baseColor *= texture2D(map, vUv);
+            }
+
+            // Lighting
+            vec3 normal = normalize(vNormal);
+            float lightIntensity = 0.0;
+            vec3 directionalLightColor = vec3(0.0);
+
+            // Assume the first directional light is the primary one for toon shading.
+            // In a more complex setup, you might iterate or select lights.
+            if (NUM_DIR_LIGHTS > 0) {
+                // Directional light direction from Three.js is already in view space and pointing FROM the light source
+                vec3 lightDir = normalize(directionalLights[0].direction);
+                lightIntensity = max(dot(normal, lightDir), 0.0);
+                directionalLightColor = directionalLights[0].color;
+            }
+
+            // Quantize light intensity for toon effect
+            float quantizedIntensity = floor(lightIntensity * toonLevels) / toonLevels;
+
+            // Combine with light color and add ambient (Three.js provides ambientLightColor globally)
+            vec3 totalLight = ambientLightColor + (directionalLightColor * quantizedIntensity);
+            vec3 outgoingLight = baseColor.rgb * totalLight;
+
+            gl_FragColor = vec4(outgoingLight, baseColor.a);
+        }
+    `
+};
+
+
 // Default settings structure
 const defaultSettings = {
     grid: {
@@ -49,8 +139,11 @@ const defaultSettings = {
     },
     sphere: {
         type: 'sphere',
-        materialType: 'MeshPhongMaterial', // Added
-        diffuseMap: null, // Added
+        materialType: 'MeshPhongMaterial',
+        diffuseMap: null,
+        toonLevels: 3, // Added for ToonMaterial
+        toonOutlineColor: new THREE.Color(0x000000), // Added for ToonMaterial
+        toonOutlineWidth: 0.02, // Added for ToonMaterial
         radius: 5,
         widthSegments: 32,
         heightSegments: 16,
@@ -71,8 +164,11 @@ const defaultSettings = {
     },
     torus: {
         type: 'torus',
-        materialType: 'MeshPhongMaterial', // Added
-        diffuseMap: null, // Added
+        materialType: 'MeshPhongMaterial',
+        diffuseMap: null,
+        toonLevels: 3,
+        toonOutlineColor: new THREE.Color(0x000000),
+        toonOutlineWidth: 0.02,
         radius: 5,
         tube: 2,
         radialSegments: 16,
@@ -94,8 +190,11 @@ const defaultSettings = {
     },
     torusknot: {
         type: 'torusknot',
-        materialType: 'MeshPhongMaterial', // Added
-        diffuseMap: null, // Added
+        materialType: 'MeshPhongMaterial',
+        diffuseMap: null,
+        toonLevels: 3,
+        toonOutlineColor: new THREE.Color(0x000000),
+        toonOutlineWidth: 0.02,
         radius: 4,
         tube: 1,
         tubularSegments: 64,
@@ -173,6 +272,13 @@ export class ObjectManager {
         if (sourceSettings.highColor) {
             newSettings.highColor = new THREE.Color().copy(sourceSettings.highColor);
         }
+        // Toon material specific settings
+        if (sourceSettings.toonOutlineColor) {
+            newSettings.toonOutlineColor = new THREE.Color().copy(sourceSettings.toonOutlineColor);
+        } else if (defaultSettings[type] && defaultSettings[type].toonOutlineColor) { // Ensure default exists
+            newSettings.toonOutlineColor = new THREE.Color().copy(defaultSettings[type].toonOutlineColor);
+        }
+
 
         // For new instances, position and rotation are reset.
         // If we were cloning an *existing* instance and wanted to preserve its transform,
@@ -526,13 +632,17 @@ export class ObjectManager {
         if (['grid', 'sphere', 'torus', 'torusknot'].includes(settings.type)) {
             const materialFolder = guiFolder.addFolder('Material');
             controllers.push(
-                materialFolder.add(settings, 'materialType', ['MeshPhongMaterial', 'MeshStandardMaterial'])
+                materialFolder.add(settings, 'materialType', ['MeshPhongMaterial', 'MeshStandardMaterial', 'ToonMaterial'])
                     .name('Material Type')
                     .onChange(newType => this._updateInstanceMaterial(instanceObject, newType))
             );
             controllers.push(
                 materialFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => {
-                    instanceObject.material.wireframe = val;
+                    if (instanceObject.material.wireframe !== undefined) { // Standard materials
+                        instanceObject.material.wireframe = val;
+                    } else if (instanceObject.material.uniforms && instanceObject.material.uniforms.wireframe) { // ShaderMaterial
+                        instanceObject.material.uniforms.wireframe.value = val;
+                    }
                 })
             );
             controllers.push(
@@ -540,6 +650,19 @@ export class ObjectManager {
                     .name('Diffuse Map URL')
                     .onChange(path => this._loadTextureToMaterial(instanceObject, 'map', path))
             );
+
+            // Toon Material Specific Controls (conditionally displayed)
+            const toonControls = [];
+            toonControls.push(materialFolder.add(settings, 'toonLevels', 1, 10).step(1).name('Toon Levels')
+                .onChange(val => { if (settings.materialType === 'ToonMaterial' && instanceObject.material.uniforms) instanceObject.material.uniforms.toonLevels.value = val; }));
+            // toonControls.push(materialFolder.addColor(settings, 'toonOutlineColor').name('Outline Color')
+            //     .onChange(val => { if (settings.materialType === 'ToonMaterial' && instanceObject.material.uniforms) instanceObject.material.uniforms.outlineColor.value.set(val); }));
+            // toonControls.push(materialFolder.add(settings, 'toonOutlineWidth', 0.0, 0.1).step(0.001).name('Outline Width')
+            //     .onChange(val => { if (settings.materialType === 'ToonMaterial' && instanceObject.material.uniforms) instanceObject.material.uniforms.outlineWidth.value = val; }));
+
+            instanceObject.userData.toonMaterialControllers = toonControls; // Store for easy access
+            this._updateToonControlsVisibility(instanceObject); // Set initial visibility
+
             // materialFolder.open(); // Optional
         }
 
@@ -675,44 +798,89 @@ export class ObjectManager {
     }
     // --- End GUI Control Creation Helpers ---
 
+    _updateToonControlsVisibility(instance) {
+        if (!instance || !instance.userData || !instance.userData.toonMaterialControllers) return;
+        const display = instance.userData.settings.materialType === 'ToonMaterial' ? 'block' : 'none';
+        instance.userData.toonMaterialControllers.forEach(controller => {
+            controller.domElement.style.display = display;
+        });
+    }
+
+
     _updateInstanceMaterial(instance, newMaterialType) {
         if (!instance || !instance.material) return;
-        if (instance.userData.settings.type === 'pointcloud') return; // Not for point clouds
+        // Point clouds and grids currently don't support ToonMaterial in this setup
+        if (instance.userData.settings.type === 'pointcloud' || instance.userData.settings.type === 'grid') {
+            if (newMaterialType === 'ToonMaterial') {
+                console.warn("ToonMaterial is not supported for point clouds or grids in the current setup.");
+                 // Revert to previous material type or a default if trying to switch to Toon
+                instance.userData.settings.materialType = instance.material.type === 'ShaderMaterial' ? 'MeshPhongMaterial' : instance.material.type.replace('THREE.', ''); // Fallback
+                // Find the controller and update its display
+                const matTypeController = instance.userData.controllers.find(c => c.property === 'materialType');
+                if (matTypeController) matTypeController.setValue(instance.userData.settings.materialType);
+                return;
+            }
+        }
+
 
         const oldMaterial = instance.material;
         const settings = instance.userData.settings;
-
         let newMaterial;
 
         // Common properties to preserve
         const preservedProps = {
-            vertexColors: oldMaterial.vertexColors,
-            wireframe: settings.wireframe, // Get from settings as it's the source of truth
-            side: oldMaterial.side,
-            map: oldMaterial.map, // Preserve existing map
-            // color: oldMaterial.color, // Preserve base color if not using vertex colors
+            vertexColors: oldMaterial.vertexColors || false, // Default to false if undefined
+            wireframe: settings.wireframe,
+            side: oldMaterial.side || THREE.FrontSide, // Default if undefined
+            map: oldMaterial.map,
         };
 
-        if (newMaterialType === 'MeshStandardMaterial') {
+        if (newMaterialType === 'ToonMaterial') {
+            const toonUniforms = THREE.UniformsUtils.clone(ToonShader.uniforms);
+
+            // Set initial values from settings or defaults
+            toonUniforms.diffuse.value = settings.lowColor; // Use lowColor as a base diffuse for toon for now
+            if (preservedProps.map) {
+                toonUniforms.map.value = preservedProps.map;
+                toonUniforms.useMap = { value: true };
+            } else {
+                toonUniforms.useMap = { value: false };
+            }
+            toonUniforms.toonLevels.value = settings.toonLevels || 3;
+
+            // These light uniforms would ideally be updated per frame or based on main scene lights.
+            // For now, using static values or values from main.js directionalLight.
+            // This part needs refinement to correctly use scene lights.
+            // Example: Link to a primary directional light from the scene if available.
+            // For simplicity, we'll use the default lightDirection from ToonShader for now.
+            // It's better to pass light info from the main render loop or a light manager.
+
+            newMaterial = new THREE.ShaderMaterial({
+                uniforms: toonUniforms,
+                vertexShader: ToonShader.vertexShader,
+                fragmentShader: ToonShader.fragmentShader,
+                lights: true, // Important: This tells Three.js to provide lighting uniforms
+                vertexColors: preservedProps.vertexColors, // Crucial for audio-reactive colors to work
+                wireframe: preservedProps.wireframe,
+                side: preservedProps.side,
+            });
+        } else if (newMaterialType === 'MeshStandardMaterial') {
             newMaterial = new THREE.MeshStandardMaterial(preservedProps);
-            // Add/set any specific MeshStandardMaterial defaults if needed
-            // newMaterial.metalness = 0.5; // Example
-            // newMaterial.roughness = 0.5; // Example
+            // newMaterial.metalness = 0.5;
+            // newMaterial.roughness = 0.5;
         } else { // Default to MeshPhongMaterial
             newMaterial = new THREE.MeshPhongMaterial(preservedProps);
-            // Add/set any specific MeshPhongMaterial defaults if needed
         }
 
-        // If the old material had a color property and wasn't using vertex colors, apply it.
-        // Note: vertexColors takes precedence if enabled.
-        if (oldMaterial.color && !preservedProps.vertexColors) {
+        if (!(newMaterial instanceof THREE.ShaderMaterial) && oldMaterial.color && !preservedProps.vertexColors) {
             newMaterial.color.copy(oldMaterial.color);
         }
 
 
         instance.material = newMaterial;
         oldMaterial.dispose();
-        settings.materialType = newMaterialType; // Update settings
+        settings.materialType = newMaterialType;
+        this._updateToonControlsVisibility(instance); // Update GUI for toon controls
         console.log(`Instance ${instance.uuid} material updated to ${newMaterialType}`);
     }
 
