@@ -13,7 +13,13 @@ const defaultSettings = {
         frequencyRange: 'mid', // 'low', 'mid', 'high'
         visible: true,
         wireframe: false,
+        flatShading: true, // Added for explicit control
         motionInfluenceFactor: 0.5,
+        // Settings from GridManager that were missing
+        decayRate: 0.98, // For poke effect, if re-implemented
+        pokeStrength: 0.2, // For poke effect
+        pokeRadius: 1.5,   // For poke effect
+        // ---
         lowColor: new THREE.Color(0x003300),
         midColor: new THREE.Color(0x00ff00),
         highColor: new THREE.Color(0xffffff),
@@ -36,6 +42,7 @@ const defaultSettings = {
         frequencyRange: 'mid', // 'low', 'mid', 'high' (used for 'radial' displacement and 'audio' color)
         visible: true,
         motionInfluenceFactor: 0.3,
+        particleSizeAudioInfluence: 0.5, // New setting
         lowColor: new THREE.Color(0x0000ff), // Blue
         midColor: new THREE.Color(0x00ffff), // Cyan
         highColor: new THREE.Color(0xffffff), // White
@@ -55,6 +62,7 @@ const defaultSettings = {
         frequencyRange: 'mid', // 'low', 'mid', 'high'
         visible: true,
         wireframe: false,
+        flatShading: true, // Added for explicit control
         motionInfluenceFactor: 0.4,
         lowColor: new THREE.Color(0xff8800), // Orange
         midColor: new THREE.Color(0xffff00), // Yellow
@@ -76,6 +84,7 @@ const defaultSettings = {
         frequencyRange: 'mid', // 'low', 'mid', 'high'
         visible: true,
         wireframe: false,
+        flatShading: true, // Added for explicit control
         motionInfluenceFactor: 0.4,
         lowColor: new THREE.Color(0x8800ff), // Purple
         midColor: new THREE.Color(0xff00ff), // Magenta
@@ -99,6 +108,7 @@ const defaultSettings = {
         frequencyRange: 'mid', // 'low', 'mid', 'high'
         visible: true,
         wireframe: false,
+        flatShading: true, // Added for explicit control
         motionInfluenceFactor: 0.4,
         lowColor: new THREE.Color(0xff0000), // Red
         midColor: new THREE.Color(0xffaa00), // Orange-Red
@@ -429,6 +439,12 @@ export class ObjectManager {
              controllers.push(
                  guiFolder.add(settings, 'wireframe').name("Wireframe").onChange(val => material.wireframe = val)
              );
+              controllers.push(
+                  guiFolder.add(settings, 'flatShading').name("Flat Shading").onChange(val => {
+                      material.flatShading = val;
+                      material.needsUpdate = true; // Required for flatShading change
+                  })
+              );
         }
 
         // --- Type-Specific Geometry/Behavior Controls ---
@@ -436,7 +452,11 @@ export class ObjectManager {
             controllers.push(
                 guiFolder.add(settings, 'heightScale', 0.1, 10).name("Height Scale").step(0.1),
                 guiFolder.add(settings, 'colorMapping', ['height', 'audio', 'combined', 'frequencyBands']).name("Color Mapping"),
-                guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random', 'sineWave', 'checkerboard', 'ripple']).name("Wave Pattern")
+                guiFolder.add(settings, 'wavePattern', ['radial', 'linear', 'random', 'sineWave', 'checkerboard', 'ripple']).name("Wave Pattern"),
+                // Controls for former GridManager-specific poke effect (if to be re-implemented)
+                guiFolder.add(settings, 'decayRate', 0.9, 0.999).name("Poke Decay").step(0.001),
+                guiFolder.add(settings, 'pokeStrength', 0.05, 1.0).name("Poke Strength").step(0.05),
+                guiFolder.add(settings, 'pokeRadius', 0.5, 5.0).name("Poke Radius").step(0.1)
             );
         } else if (type === 'pointcloud') {
             const material = instanceObject.material;
@@ -448,7 +468,8 @@ export class ObjectManager {
                 guiFolder.add(settings, 'distributionScale', 1, 50).name("Dist Scale").step(1).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
                 guiFolder.add(settings, 'displacementScale', 0, 10).name("Displace Scale").step(0.1),
                 guiFolder.add(settings, 'displacementMode', ['radial', 'frequencyBandDisplacement']).name("Displace Mode"),
-                guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands']).name("Color Mapping")
+                guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands']).name("Color Mapping"),
+                guiFolder.add(settings, 'particleSizeAudioInfluence', 0, 2).name("Size Audio Influence").step(0.05)
              );
         } else if (type === 'sphere') {
              controllers.push(
@@ -555,6 +576,8 @@ export class ObjectManager {
         // Reset specific material properties
         if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
             instance.material.wireframe = settings.wireframe;
+            instance.material.flatShading = settings.flatShading; // Apply flatShading
+            instance.material.needsUpdate = true; // Ensure material updates
         }
         if (type === 'pointcloud') {
              instance.material.size = settings.particleSize;
@@ -1136,6 +1159,7 @@ export class ObjectManager {
         const colors = geometry.attributes.color.array;
         const initialPositions = geometry.userData.initialPositions;
         const particleCount = settings.particleCount; // Use count from settings
+        const material = points.material; // Get material for size update
 
         // Ensure buffers match particle count (basic check)
         if (positions.length !== particleCount * 3 || initialPositions.length !== particleCount * 3 || colors.length !== particleCount * 3) {
@@ -1145,6 +1169,21 @@ export class ObjectManager {
         }
 
         const averageAmplitude = audioManager.getAverageAmplitude(settings.frequencyRange); // Normalized 0-255
+        const normalizedAvgAmpForSize = averageAmplitude / 255; // For particle size modulation
+
+        // Modulate particle size by audio
+        // Ensure particleSizeAudioInfluence is a setting if you want it configurable
+        const baseParticleSize = settings.particleSize || 0.1; // Default if not set
+        const particleSizeAudioInfluence = settings.particleSizeAudioInfluence !== undefined ? settings.particleSizeAudioInfluence : 0.5; // How much audio affects size
+        const minParticleSizeFactor = 0.5; // Particle size won't go below 50% of base
+
+        if (material && audioManager.audioContext) {
+            material.size = baseParticleSize * (minParticleSizeFactor + (1 - minParticleSizeFactor + normalizedAvgAmpForSize * particleSizeAudioInfluence * 2.0) );
+            // The formula above tries to make particles shrink a bit with low audio and grow significantly with high audio.
+            // Adjust minParticleSizeFactor and the multiplier for normalizedAvgAmpForSize as needed.
+            // A simpler version: material.size = baseParticleSize * (1 + normalizedAvgAmpForSize * particleSizeAudioInfluence);
+        }
+
 
         // Calculate effective parameters based on motion
         let effectiveDisplacementScale = settings.displacementScale;

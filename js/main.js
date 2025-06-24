@@ -11,6 +11,7 @@ import { ObjectManager } from './ObjectManager.js'; // Import ObjectManager
 import { AudioManager } from './AudioManager.js';
 import { CameraManager } from './CameraManager.js';
 import { CameraVisualizer } from './CameraVisualizer.js';
+// GridManager is no longer used.
 
 // --- Constants ---
 const GRID_SIZE = 15; // Physical size for grids (used for initial grid and camera positioning)
@@ -45,7 +46,7 @@ guiContainer.appendChild(gui.domElement); // Place GUI in our container
 const audioManager = new AudioManager();
 const cameraManager = new CameraManager(VIDEO_ELEMENT_ID);
 const objectManager = new ObjectManager(scene, gui, GRID_SIZE, GRID_SEGMENTS); // Instantiate ObjectManager
-const cameraVisualizer = new CameraVisualizer(scene, cameraManager, {
+const cameraVisualizer = new CameraVisualizer(scene, cameraManager, audioManager, { // Pass audioManager
     widthSegments: 128, // Higher resolution visualizer
     heightSegments: 96,
     visible: false, // Start hidden
@@ -113,7 +114,16 @@ const settings = {
     // General View/Control Settings
     transformMode: 'translate',
     autoRotateSpeed: orbitControls.autoRotateSpeed,
+    // Background Settings
+    backgroundType: 'Solid', // Solid, LinearGradient, RadialGradient, Image
     globalBackgroundColor: scene.background.getHex(),
+    gradientColor1: new THREE.Color(0x111111).getHex(),
+    gradientColor2: new THREE.Color(0x555555).getHex(),
+    imageBackgroundUrl: '',
+    imageBackgroundRepeatX: 1,
+    imageBackgroundRepeatY: 1,
+    imageBackgroundDisplayMode: 'Cover', // Cover, Stretch, Tile
+    triggerImageBackgroundLoad: () => { document.getElementById('imageBackgroundInput').click(); },
     // Post Processing Settings
     bloomStrength: bloomPass.strength,
     bloomThreshold: bloomPass.threshold,
@@ -152,6 +162,94 @@ const cameraSettings = {
     // visualizationParticleSize: cameraVisualizer.options.particleSize,
     // visualizationColorMode: cameraVisualizer.options.colorMode,
 };
+
+// --- Background Update Function ---
+let backgroundTexture = null; // Keep a reference to dispose of old textures
+
+function updateBackground() {
+    // Dispose previous texture if it exists
+    if (backgroundTexture && backgroundTexture.dispose) {
+        backgroundTexture.dispose();
+        backgroundTexture = null;
+    }
+    scene.background = null; // Clear previous background
+
+    const type = settings.backgroundType;
+
+    if (type === 'Solid') {
+        scene.background = new THREE.Color(settings.globalBackgroundColor);
+    } else if (type === 'LinearGradient' || type === 'RadialGradient') {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = window.innerWidth; // Use full window size for better quality
+        canvas.height = window.innerHeight;
+
+        let gradient;
+        if (type === 'LinearGradient') {
+            gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+        } else { // RadialGradient
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = Math.max(centerX, centerY);
+            gradient = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+        }
+
+        gradient.addColorStop(0, settings.gradientColor1);
+        gradient.addColorStop(1, settings.gradientColor2);
+
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        backgroundTexture = new THREE.CanvasTexture(canvas);
+        scene.background = backgroundTexture;
+    } else if (type === 'Image') {
+        if (settings.imageBackgroundUrl) {
+            const loader = new THREE.TextureLoader();
+            loader.load(
+                settings.imageBackgroundUrl,
+                (texture) => {
+                    backgroundTexture = texture; // Store reference for potential disposal
+                    if (settings.imageBackgroundDisplayMode === 'Tile') {
+                        texture.wrapS = THREE.RepeatWrapping;
+                        texture.wrapT = THREE.RepeatWrapping;
+                        texture.repeat.set(settings.imageBackgroundRepeatX, settings.imageBackgroundRepeatY);
+                    } else if (settings.imageBackgroundDisplayMode === 'Stretch') {
+                        texture.wrapS = THREE.ClampToEdgeWrapping;
+                        texture.wrapT = THREE.ClampToEdgeWrapping;
+                        texture.repeat.set(1, 1); // Ensure no repeat for stretch
+                    } else { // 'Cover'
+                        texture.wrapS = THREE.ClampToEdgeWrapping;
+                        texture.wrapT = THREE.ClampToEdgeWrapping;
+                        // Calculate aspect ratios
+                        const imgAspect = texture.image.width / texture.image.height;
+                        const screenAspect = window.innerWidth / window.innerHeight;
+
+                        if (imgAspect > screenAspect) { // Image is wider than screen
+                            texture.repeat.set(screenAspect / imgAspect, 1);
+                            texture.offset.set((1 - screenAspect / imgAspect) / 2, 0); // Center horizontally
+                        } else { // Image is taller than or equal aspect to screen
+                            texture.repeat.set(1, imgAspect / screenAspect);
+                            texture.offset.set(0, (1 - imgAspect / screenAspect) / 2); // Center vertically
+                        }
+                    }
+                    texture.needsUpdate = true; // Signal Three.js to update the texture
+                    scene.background = texture;
+                },
+                undefined, // onProgress callback (optional)
+                (error) => {
+                    console.error('Error loading background image:', error);
+                    alert('Failed to load background image. Check URL or file.');
+                    scene.background = new THREE.Color(settings.globalBackgroundColor); // Fallback
+                }
+            );
+        } else {
+            // No URL, fallback to solid color
+            scene.background = new THREE.Color(settings.globalBackgroundColor);
+        }
+    }
+    // console.log("Background updated to:", type, scene.background);
+}
+
 
 // --- GUI Setup ---
 
@@ -196,12 +294,51 @@ function switchTab(name) {
 // Global Settings Folder
 const globalFolder = gui.addFolder('Global Settings');
 guiFolders['Global'] = { folder: globalFolder }; // Register folder (button added later)
-globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
+
+// --- Background Controls ---
+const backgroundFolder = globalFolder.addFolder('Background');
+const bgTypeController = backgroundFolder.add(settings, 'backgroundType', ['Solid', 'LinearGradient', 'RadialGradient', 'Image']).name('Type');
+
+const solidColorController = backgroundFolder.addColor(settings, 'globalBackgroundColor').name('Solid Color').onChange(val => {
+    if (settings.backgroundType === 'Solid') scene.background.setHex(val);
+});
+const gradientColor1Controller = backgroundFolder.addColor(settings, 'gradientColor1').name('Gradient Color 1').onChange(updateBackground);
+const gradientColor2Controller = backgroundFolder.addColor(settings, 'gradientColor2').name('Gradient Color 2').onChange(updateBackground);
+
+const imageControls = {
+    urlController: backgroundFolder.add(settings, 'imageBackgroundUrl').name('Image URL (or load)').onFinishChange(updateBackground),
+    loadButtonController: backgroundFolder.add(settings, 'triggerImageBackgroundLoad').name('Load Image File'),
+    displayModeController: backgroundFolder.add(settings, 'imageBackgroundDisplayMode', ['Cover', 'Stretch', 'Tile']).name('Display Mode').onChange(updateBackground),
+    repeatXController: backgroundFolder.add(settings, 'imageBackgroundRepeatX', 1, 10).step(1).name('Repeat X').onChange(updateBackground),
+    repeatYController: backgroundFolder.add(settings, 'imageBackgroundRepeatY', 1, 10).step(1).name('Repeat Y').onChange(updateBackground)
+};
+
+function toggleBackgroundControls(type) {
+    solidColorController.domElement.style.display = (type === 'Solid') ? '' : 'none'; // .domElement is the li, which is the row
+    gradientColor1Controller.domElement.style.display = (type === 'LinearGradient' || type === 'RadialGradient') ? '' : 'none';
+    gradientColor2Controller.domElement.style.display = (type === 'LinearGradient' || type === 'RadialGradient') ? '' : 'none';
+    imageControls.urlController.domElement.style.display = (type === 'Image') ? '' : 'none';
+    imageControls.loadButtonController.domElement.style.display = (type === 'Image') ? '' : 'none';
+    imageControls.displayModeController.domElement.style.display = (type === 'Image') ? '' : 'none';
+    const showRepeat = type === 'Image' && settings.imageBackgroundDisplayMode === 'Tile';
+    imageControls.repeatXController.domElement.style.display = showRepeat ? '' : 'none';
+    imageControls.repeatYController.domElement.style.display = showRepeat ? '' : 'none';
+    updateBackground(); // Update background when type changes
+}
+
+bgTypeController.onChange(toggleBackgroundControls);
+// Initialize visibility
+toggleBackgroundControls(settings.backgroundType);
+backgroundFolder.open();
+// --- End Background Controls ---
+
+
 globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
     .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
 globalFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate"); // Renamed for clarity
 globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val); // Renamed for clarity
+
 
 // Audio & Camera Folder
 const audioCameraFolder = gui.addFolder('Audio & Camera');
@@ -290,6 +427,8 @@ const visualizerSettings = {
     particleSize: cameraVisualizer.options.particleSize,
     depthScale: cameraVisualizer.options.depthScale,
     colorMode: cameraVisualizer.options.colorMode,
+    particleFadeSpeed: cameraVisualizer.options.particleFadeSpeed,
+    particleRandomMotion: cameraVisualizer.options.particleRandomMotion,
 };
 
 // Enable/Disable Toggle
@@ -368,9 +507,15 @@ function addVisualizerTransformControls() {
     visualizerControls.push(scaleFolder);
 
     // Other Visualizer Controls
-    visualizerControls.push(visualizerFolder.add(visualizerSettings, 'colorMode', ['brightness', 'color']).name('Color Mode').onChange(val => cameraVisualizer.setColorMode(val)));
+    const colorModes = ['brightness', 'color', 'fftLow', 'fftMid', 'fftHigh', 'fftSpectrum'];
+    visualizerControls.push(visualizerFolder.add(visualizerSettings, 'colorMode', colorModes).name('Color Mode').onChange(val => cameraVisualizer.setColorMode(val)));
     visualizerControls.push(visualizerFolder.add(visualizerSettings, 'depthScale', 1, 20).name('Depth Scale').onChange(val => cameraVisualizer.setDepthScale(val)));
     visualizerControls.push(visualizerFolder.add(visualizerSettings, 'particleSize', 0.01, 0.5).name('Particle Size').onChange(val => cameraVisualizer.setParticleSize(val)));
+
+    const particleEffectsFolder = visualizerFolder.addFolder('Particle Effects');
+    visualizerControls.push(particleEffectsFolder.add(visualizerSettings, 'particleFadeSpeed', 0, 0.5).name('Fade Speed').step(0.01).onChange(val => cameraVisualizer.setParticleFadeSpeed(val)));
+    visualizerControls.push(particleEffectsFolder.add(visualizerSettings, 'particleRandomMotion', 0, 1.0).name('Random Motion').step(0.01).onChange(val => cameraVisualizer.setParticleRandomMotion(val)));
+    visualizerControls.push(particleEffectsFolder); // Add folder itself to list
 
     // Set initial state based on whether visualizer is enabled
     setVisualizerControlsState(visualizerSettings.enableVisualizer);
@@ -379,14 +524,18 @@ function addVisualizerTransformControls() {
 // Helper to enable/disable visualizer controls
 function setVisualizerControlsState(enabled) {
     visualizerControls.forEach(controlOrFolder => {
+        if (!controlOrFolder || !controlOrFolder.domElement) return; // Guard against null/undefined elements
+
         // Check if it's a folder or a controller
         if (controlOrFolder instanceof dat.GUI) { // It's a folder
-             controlOrFolder.__controllers.forEach(controller => {
-                 controller.domElement.style.pointerEvents = enabled ? 'auto' : 'none';
-                 controller.domElement.style.opacity = enabled ? 1.0 : 0.5;
-             });
-             // Also toggle folder open/close state visually
-             if (enabled) controlOrFolder.open(); else controlOrFolder.close();
+            controlOrFolder.__controllers.forEach(controller => {
+                if (controller && controller.domElement) {
+                    controller.domElement.style.pointerEvents = enabled ? 'auto' : 'none';
+                    controller.domElement.style.opacity = enabled ? 1.0 : 0.5;
+                }
+            });
+            // Also toggle folder open/close state visually
+            if (enabled) controlOrFolder.open(); else controlOrFolder.close();
         } else { // It's a controller
             controlOrFolder.domElement.style.pointerEvents = enabled ? 'auto' : 'none';
             controlOrFolder.domElement.style.opacity = enabled ? 1.0 : 0.5;
@@ -442,6 +591,21 @@ switchTab('Global');
 
 
 // --- Event Listeners ---
+
+// Hidden Image File Input Listener (for background)
+document.getElementById('imageBackgroundInput').addEventListener('change', (e) => {
+    if (e.target.files && e.target.files[0]) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            settings.imageBackgroundUrl = event.target.result;
+            imageControls.urlController.setValue(event.target.result); // Update GUI
+            updateBackground(); // Apply the new image
+        };
+        reader.readAsDataURL(file);
+        document.getElementById('imageBackgroundInput').value = ''; // Reset file input
+    }
+});
 
 // Hidden Audio File Input Listener
 document.getElementById('audioInput').addEventListener('change', async (e) => {
@@ -503,6 +667,7 @@ window.addEventListener('resize', () => {
     composer.setSize(window.innerWidth, window.innerHeight);
     pixelatePass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
     fxaaPass.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
+    updateBackground(); // Update background on resize for gradients and image cover/stretch
 });
 
 // --- Core Logic Functions ---
@@ -530,7 +695,7 @@ function animate(timestamp) {
     // --- Update Camera Visualization ---
     // Update visualizer if it's enabled AND camera is running
     if (visualizerEnabled && cameraManager.isRunning) {
-        cameraVisualizer.update(); // Update particle positions/colors using the frame processed above
+        cameraVisualizer.update(deltaTime); // Pass deltaTime for frame-rate independent animations
     }
     // Note: Visibility of the points object itself is handled within CameraVisualizer.update/setVisible
 

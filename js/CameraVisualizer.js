@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 
 export class CameraVisualizer {
-    constructor(scene, cameraManager, options = {}) {
+    constructor(scene, cameraManager, audioManager, options = {}) { // Added audioManager
         this.scene = scene;
         this.cameraManager = cameraManager;
+        this.audioManager = audioManager; // Store audioManager
 
         // Default options
         this.options = {
@@ -13,7 +14,9 @@ export class CameraVisualizer {
             depthScale: options.depthScale || 5.0, // How much brightness affects Z position
             visualScale: options.visualScale || 15, // Size of the particle plane in the scene
             visible: options.visible || false,
-            colorMode: options.colorMode || 'brightness', // 'brightness' or 'color'
+            colorMode: options.colorMode || 'brightness', // 'brightness', 'color', 'fftLow', 'fftMid', 'fftHigh', 'fftSpectrum'
+            particleFadeSpeed: 0.0, // 0 = no fade, > 0 = fade speed
+            particleRandomMotion: 0.0, // 0 = no random motion, > 0 = motion intensity
             // Add transform defaults
             position: options.position || new THREE.Vector3(0, 0, -5), // Default position slightly back
             rotation: options.rotation || new THREE.Euler(0, 0, 0),
@@ -101,7 +104,7 @@ export class CameraVisualizer {
         return this.points;
     }
 
-    update() {
+    update(deltaTime = 0.016) { // Accept deltaTime, provide a fallback
         // Check if ready to update
         const canUpdate = this.isInitialized &&
                           this.options.visible &&
@@ -144,49 +147,98 @@ export class CameraVisualizer {
 
         const positions = this.geometry.attributes.position.array;
         const colors = this.geometry.attributes.color.array;
+        // deltaTime is now passed as an argument
+
+        // Get FFT data if needed for current color mode
+        let lowAmp = 0, midAmp = 0, highAmp = 0;
+        const cm = this.options.colorMode;
+        if (cm === 'fftLow' || cm === 'fftMid' || cm === 'fftHigh' || cm === 'fftSpectrum') {
+            if (this.audioManager && this.audioManager.audioContext) {
+                lowAmp = this.audioManager.getAverageAmplitude('low') / 255; // Normalize 0-1
+                midAmp = this.audioManager.getAverageAmplitude('mid') / 255;
+                highAmp = this.audioManager.getAverageAmplitude('high') / 255;
+            }
+        }
+
 
         let k = 0;
         for (let i = 0; i < this.options.widthSegments; i++) {
             for (let j = 0; j < this.options.heightSegments; j++) {
+                const pIndex = k * 3;
                 // Map particle grid coordinates (u, v) to video texture coordinates
                 const u = i / (this.options.widthSegments - 1);
-                // Flip V for image coords (0,0 is top-left in canvas, but often bottom-left in textures)
-                // Particle Y increases upwards, so sample image Y downwards.
-                const v = 1.0 - (j / (this.options.heightSegments - 1));
+                const v_img = 1.0 - (j / (this.options.heightSegments - 1)); // Flipped for image sampling
 
-                // Calculate corresponding pixel index in the ImageData
                 const sampleX = Math.floor(u * (videoWidth - 1));
-                const sampleY = Math.floor(v * (videoHeight - 1));
-                const pixelIndex = (sampleY * videoWidth + sampleX) * 4; // 4 components (R, G, B, A)
+                const sampleY = Math.floor(v_img * (videoHeight - 1));
+                const pixelIndex = (sampleY * videoWidth + sampleX) * 4;
 
-                // Check bounds for safety
                 if (pixelIndex < 0 || pixelIndex + 3 >= data.length) {
-                    continue; // Skip if index is out of bounds
+                    k++; continue;
                 }
 
-                // Sample color components
-                const r = data[pixelIndex] / 255.0;     // Normalize to 0-1
-                const g = data[pixelIndex + 1] / 255.0;
-                const b = data[pixelIndex + 2] / 255.0;
+                const r_cam = data[pixelIndex] / 255.0;
+                const g_cam = data[pixelIndex + 1] / 255.0;
+                const b_cam = data[pixelIndex + 2] / 255.0;
+                const brightness = (r_cam + g_cam + b_cam) / 3;
 
-                // Calculate brightness (average of R, G, B)
-                const brightness = (r + g + b) / 3;
+                // --- Particle Position Update (Z + optional random motion) ---
+                positions[pIndex + 2] = brightness * this.options.depthScale;
 
-                // Update Z position based on brightness (relative to particle plane)
-                // We access the array directly for performance
-                positions[k * 3 + 2] = brightness * this.options.depthScale;
-
-                // Update color based on selected mode
-                if (this.options.colorMode === 'color') {
-                    colors[k * 3] = r;
-                    colors[k * 3 + 1] = g;
-                    colors[k * 3 + 2] = b;
-                } else { // 'brightness' mode
-                    colors[k * 3] = brightness;
-                    colors[k * 3 + 1] = brightness;
-                    colors[k * 3 + 2] = brightness;
+                if (this.options.particleRandomMotion > 0) {
+                    const motionStrength = this.options.particleRandomMotion * 0.1; // Scale factor
+                    positions[pIndex] += (Math.random() - 0.5) * motionStrength * deltaTime;
+                    positions[pIndex + 1] += (Math.random() - 0.5) * motionStrength * deltaTime;
+                    // Optional: Add random Z motion too, if desired
+                    // positions[pIndex + 2] += (Math.random() - 0.5) * motionStrength * deltaTime * 0.5;
                 }
 
+
+                // --- Particle Color Update ---
+                let r_col = brightness, g_col = brightness, b_col = brightness; // Default to brightness
+
+                switch (this.options.colorMode) {
+                    case 'color':
+                        r_col = r_cam; g_col = g_cam; b_col = b_cam;
+                        break;
+                    case 'fftLow':
+                        r_col = lowAmp; g_col = lowAmp; b_col = lowAmp;
+                        break;
+                    case 'fftMid':
+                        r_col = midAmp; g_col = midAmp; b_col = midAmp;
+                        break;
+                    case 'fftHigh':
+                        r_col = highAmp; g_col = highAmp; b_col = highAmp;
+                        break;
+                    case 'fftSpectrum':
+                        r_col = lowAmp; g_col = midAmp; b_col = highAmp;
+                        break;
+                    case 'brightness': // Fallthrough, already default
+                    default:
+                        break;
+                }
+
+                // Apply fade
+                if (this.options.particleFadeSpeed > 0) {
+                    const fadeFactor = Math.max(0, 1.0 - (this.options.particleFadeSpeed * deltaTime));
+                    // It's tricky to fade vertex colors directly without alpha or more complex shader.
+                    // For simplicity, we'll fade towards black.
+                    // A better fade would involve alpha and transparent material, or a custom shader.
+                    colors[pIndex] *= fadeFactor;
+                    colors[pIndex + 1] *= fadeFactor;
+                    colors[pIndex + 2] *= fadeFactor;
+
+                    // Mix with new color (rudimentary, could be improved)
+                    const mixFactor = 0.1; // How much new color to introduce
+                    colors[pIndex] = colors[pIndex] * (1 - mixFactor) + r_col * mixFactor;
+                    colors[pIndex + 1] = colors[pIndex + 1] * (1 - mixFactor) + g_col * mixFactor;
+                    colors[pIndex + 2] = colors[pIndex + 2] * (1 - mixFactor) + b_col * mixFactor;
+
+                } else {
+                    colors[pIndex] = r_col;
+                    colors[pIndex + 1] = g_col;
+                    colors[pIndex + 2] = b_col;
+                }
                 k++;
             }
         }
@@ -215,34 +267,30 @@ export class CameraVisualizer {
 
     setDepthScale(scale) {
         this.options.depthScale = scale;
-        // Store in options as well if needed for persistence/reset
-        if (this.points) this.options.position.copy(this.points.position);
+        // No need to update this.points here, options are source of truth for this property.
+        // Visual update happens in the main update() loop.
     }
 
     setPosition(x, y, z) {
+        this.options.position.set(x, y, z);
         if (this.points) {
             this.points.position.set(x, y, z);
-            // Store in options as well if needed for persistence/reset
-            this.options.position.copy(this.points.position);
         }
     }
 
     setRotation(xRad, yRad, zRad) {
+        this.options.rotation.set(xRad, yRad, zRad);
         if (this.points) {
             this.points.rotation.set(xRad, yRad, zRad);
-             // Store in options as well if needed for persistence/reset
-            this.options.rotation.copy(this.points.rotation);
         }
     }
 
     setScale(x, y, z) {
+        this.options.scale.set(x, y, z);
         if (this.points) {
             this.points.scale.set(x, y, z);
-             // Store in options as well if needed for persistence/reset
-            this.options.scale.copy(this.points.scale);
         }
     }
-
 
      setParticleSize(size) {
          this.options.particleSize = size;
@@ -253,16 +301,25 @@ export class CameraVisualizer {
      }
 
      setColorMode(mode) {
-         if (mode === 'brightness' || mode === 'color') {
+         const validModes = ['brightness', 'color', 'fftLow', 'fftMid', 'fftHigh', 'fftSpectrum'];
+         if (validModes.includes(mode)) {
              this.options.colorMode = mode;
              // Trigger an update to reflect the change immediately if visible
              if (this.options.visible && this.isInitialized) {
                  this.update();
              }
          } else {
-             console.warn(`CameraVisualizer: Invalid color mode "${mode}". Use 'brightness' or 'color'.`);
+             console.warn(`CameraVisualizer: Invalid color mode "${mode}". Valid modes are: ${validModes.join(', ')}.`);
          }
      }
+
+    setParticleFadeSpeed(speed) {
+        this.options.particleFadeSpeed = Math.max(0, speed); // Ensure non-negative
+    }
+
+    setParticleRandomMotion(intensity) {
+        this.options.particleRandomMotion = Math.max(0, intensity); // Ensure non-negative
+    }
 
     // TODO: Add method to update particle count (requires recreating geometry/points)
 
