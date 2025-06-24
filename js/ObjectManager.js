@@ -107,6 +107,26 @@ const defaultSettings = {
         rotation: new THREE.Euler(),
         autoRotate: false, // Added
         rotationSpeed: new THREE.Vector3(0, 0, 0) // Added
+    },
+    dancingcubes: { // Renamed from dancingCubes to dancingcubes to match convention
+        type: 'dancingcubes',
+        cubeCount: 27, // e.g., 3x3x3 grid
+        arrangement: 'grid', // 'grid', 'sphere', 'random'
+        cubeSize: 0.5,
+        overallScale: 5,
+        audioInfluence: 1.0,
+        frequencyRange: 'mid',
+        motionInfluenceFactor: 0.2,
+        colorMapping: 'audio', // 'audio', 'frequencyBands', 'individual'
+        effectMode: 'scale', // 'scale', 'rotate', 'position', 'combination'
+        lowColor: new THREE.Color(0x0055aa), // Bluish
+        midColor: new THREE.Color(0x00aaff), // Lighter Blue
+        highColor: new THREE.Color(0xaaddff), // Very Light Blue
+        visible: true,
+        position: new THREE.Vector3(),
+        rotation: new THREE.Euler(),
+        autoRotate: false,
+        rotationSpeed: new THREE.Vector3(0, 0, 0)
     }
 };
 
@@ -129,7 +149,8 @@ export class ObjectManager {
             pointcloud: this.createPointCloudTemplate(),
             sphere: this.createSphereTemplate(),
             torus: this.createTorusTemplate(),
-            torusknot: this.createTorusKnotTemplate()
+            torusknot: this.createTorusKnotTemplate(),
+            dancingcubes: this.createDancingCubesTemplate()
         };
         this.instanceCount = 0;
 
@@ -301,6 +322,36 @@ export class ObjectManager {
         };
     }
 
+    createDancingCubesTemplate() {
+        const settings = defaultSettings.dancingcubes;
+        // The "geometry" for a DancingCubes group is just a Group object.
+        // Individual cube geometries will be created when an instance is made.
+        // The material here is a placeholder or could be a shared material if desired.
+        const group = new THREE.Group(); // The "geometry" is the group itself.
+        group.userData = {
+            // Store initial relative positions of sub-cubes here if needed for reset,
+            // or calculate them on the fly in resetObjectInitialGeometry.
+            // For now, we'll calculate them dynamically.
+            subCubes: [] // Will hold references to the actual cube meshes
+        };
+
+        // A default material for the cubes (can be overridden or individualized later)
+        const material = new THREE.MeshPhongMaterial({
+            color: 0xffffff, // Default white, will be changed by vertex colors or instance settings
+            vertexColors: true, // If we decide to color individual cubes' vertices
+            flatShading: true,
+            emissive: 0x111111,
+            specular: 0xaaaaaa,
+            shininess: 30,
+        });
+
+        return {
+            geometry: group, // The "geometry" is the group
+            material: material, // A base material for sub-cubes
+            defaultSettings: settings
+        };
+    }
+
 
     // --- Instance Management ---
 
@@ -311,43 +362,59 @@ export class ObjectManager {
         }
 
         const template = this.templates[type];
-        const geometry = template.geometry.clone();
-        const material = template.material.clone();
+        let geometry, material, instanceObject;
 
-        // Ensure attributes are cloned properly for independent modification
-        geometry.attributes.position = geometry.attributes.position.clone();
-        geometry.attributes.position.array = new Float32Array(geometry.attributes.position.array);
-        if (geometry.attributes.color) {
-            geometry.attributes.color = geometry.attributes.color.clone();
-            geometry.attributes.color.array = new Float32Array(geometry.attributes.color.array);
-        }
-        if (geometry.attributes.normal && type !== 'pointcloud') { // Point clouds don't have normals
-             geometry.attributes.normal = geometry.attributes.normal.clone();
-             geometry.attributes.normal.array = new Float32Array(geometry.attributes.normal.array);
-        }
-
-        // Clone userData deeply for arrays
-        geometry.userData = {};
-        for (const key in template.geometry.userData) {
-            if (template.geometry.userData[key] instanceof Float32Array) {
-                geometry.userData[key] = new Float32Array(template.geometry.userData[key]);
-            } else {
-                geometry.userData[key] = JSON.parse(JSON.stringify(template.geometry.userData[key]));
-            }
-        }
-
-
-        let instanceObject;
-        if (type === 'grid') {
-            instanceObject = new THREE.Mesh(geometry, material);
-            instanceObject.rotation.x = -Math.PI / 2; // Default grid orientation
-        } else if (type === 'pointcloud') {
-            instanceObject = new THREE.Points(geometry, material);
-        } else if (type === 'sphere' || type === 'torus' || type === 'torusknot') {
-            instanceObject = new THREE.Mesh(geometry, material);
+        if (type === 'dancingcubes') {
+            // For dancingcubes, the "geometry" is a Group.
+            // We clone the group (which is lightweight) and the base material for sub-cubes.
+            instanceObject = template.geometry.clone(); // Clones the THREE.Group
+            material = template.material.clone(); // This is the material for sub-cubes
+            instanceObject.userData = { subCubes: [] }; // Ensure fresh subCubes array
         } else {
-             console.error(`Unhandled object type for mesh/points creation: ${type}`);
-             return null;
+            geometry = template.geometry.clone();
+            material = template.material.clone();
+
+            // Ensure attributes are cloned properly for independent modification
+            if (geometry.attributes) { // Check if attributes exist (e.g. not for a simple Group)
+                if (geometry.attributes.position) {
+                    geometry.attributes.position = geometry.attributes.position.clone();
+                    geometry.attributes.position.array = new Float32Array(geometry.attributes.position.array);
+                }
+                if (geometry.attributes.color) {
+                    geometry.attributes.color = geometry.attributes.color.clone();
+                    geometry.attributes.color.array = new Float32Array(geometry.attributes.color.array);
+                }
+                if (geometry.attributes.normal && type !== 'pointcloud') {
+                     geometry.attributes.normal = geometry.attributes.normal.clone();
+                     geometry.attributes.normal.array = new Float32Array(geometry.attributes.normal.array);
+                }
+            }
+
+
+            // Clone userData deeply for arrays
+            geometry.userData = {};
+            for (const key in template.geometry.userData) {
+                if (template.geometry.userData[key] instanceof Float32Array) {
+                    geometry.userData[key] = new Float32Array(template.geometry.userData[key]);
+                } else {
+                    // Avoid cloning subCubes array directly here, it's handled for dancingcubes specifically
+                    if (key !== 'subCubes') {
+                         geometry.userData[key] = JSON.parse(JSON.stringify(template.geometry.userData[key]));
+                    }
+                }
+            }
+
+            if (type === 'grid') {
+                instanceObject = new THREE.Mesh(geometry, material);
+                instanceObject.rotation.x = -Math.PI / 2; // Default grid orientation
+            } else if (type === 'pointcloud') {
+                instanceObject = new THREE.Points(geometry, material);
+            } else if (type === 'sphere' || type === 'torus' || type === 'torusknot') {
+                instanceObject = new THREE.Mesh(geometry, material);
+            } else {
+                 console.error(`Unhandled object type for mesh/points creation: ${type}`);
+                 return null;
+            }
         }
 
 
@@ -367,16 +434,21 @@ export class ObjectManager {
         // Apply specific material properties from settings
         if (type === 'grid' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
             material.wireframe = newSettings.wireframe;
-        }
-        if (type === 'pointcloud') {
+        } else if (type === 'pointcloud') {
             material.size = newSettings.particleSize;
         }
+        // For dancingcubes, the main 'material' is for sub-cubes, managed in resetObjectInitialGeometry/update.
 
-        instanceObject.userData = {
+        instanceObject.userData = { // For all types, instanceObject is the root (Mesh, Points, or Group)
             settings: newSettings,
             guiFolder: null,
-            controllers: [] // To keep track of GUI controllers for removal
+            controllers: [], // To keep track of GUI controllers for removal
+            // For dancingcubes, subCubes will be populated in resetObjectInitialGeometry
         };
+        if (type === 'dancingcubes') {
+            instanceObject.userData.subCubeMaterial = material; // Store the sub-cube material reference
+        }
+
 
         // If cloning, copy transform AFTER setting up userData
         if (baseInstance) {
@@ -389,8 +461,8 @@ export class ObjectManager {
         instanceObject.userData.settings.position.copy(instanceObject.position);
         instanceObject.userData.settings.rotation.copy(instanceObject.rotation);
 
-        // If it's a point cloud, sphere, torus, or torus knot, ensure its initial geometry matches its settings
-        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot') {
+        // If it's a point cloud, sphere, torus, torus knot, or dancingcubes, ensure its initial geometry matches its settings
+        if (type === 'pointcloud' || type === 'sphere' || type === 'torus' || type === 'torusknot' || type === 'dancingcubes') {
              this.resetObjectInitialGeometry(instanceObject);
         }
 
@@ -478,6 +550,22 @@ export class ObjectManager {
                  guiFolder.add(settings, 'displacementScale', 0, 5).name("Displace Scale").step(0.1),
                  guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'normal']).name("Color Mapping")
              );
+        } else if (type === 'dancingcubes') {
+            controllers.push(
+                guiFolder.add(settings, 'cubeCount', 1, 216).name("Cube Count").step(1).onChange(() => {
+                    this.resetObjectInitialGeometry(instanceObject);
+                    // Update GUI if cubeCount was adjusted by resetObjectInitialGeometry (e.g. for grid)
+                    // This requires the controller to be stored and updated if settings.cubeCount changes.
+                    // For now, we assume the user sees the change on next interaction or we find a way to refresh it.
+                    // Potential refresh: instanceObject.userData.controllers.find(c => c.property === 'cubeCount').updateDisplay();
+                    // However, this needs careful handling as controller might not be in the array yet.
+                }),
+                guiFolder.add(settings, 'arrangement', ['grid', 'sphere', 'random']).name("Arrangement").onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                guiFolder.add(settings, 'cubeSize', 0.1, 2).name("Cube Size").step(0.05).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                guiFolder.add(settings, 'overallScale', 1, 20).name("Overall Scale").step(0.5).onChange(() => this.resetObjectInitialGeometry(instanceObject)),
+                guiFolder.add(settings, 'colorMapping', ['audio', 'frequencyBands', 'individual']).name("Color Mapping"),
+                guiFolder.add(settings, 'effectMode', ['scale', 'rotate', 'position', 'combination']).name("Effect Mode")
+            );
         }
 
         // --- Rotation Controls (Added) ---
@@ -595,12 +683,84 @@ export class ObjectManager {
 
         const settings = instance.userData.settings;
         const type = settings.type;
-        const geometry = instance.geometry;
+        const groupOrGeometry = instance; // For dancingcubes, 'instance' is the Group
 
         console.log(`Resetting initial geometry for ${type} instance ${instance.uuid}`);
 
+        // --- Dancing Cubes Specific ---
+        if (type === 'dancingcubes') {
+            const group = groupOrGeometry; // instance is the THREE.Group
+            const subCubeMaterial = instance.userData.subCubeMaterial;
+
+            // Clear existing sub-cubes from the group and userData
+            group.userData.subCubes.forEach(cube => group.remove(cube));
+            group.userData.subCubes = [];
+
+            const cubeGeom = new THREE.BoxGeometry(settings.cubeSize, settings.cubeSize, settings.cubeSize);
+
+            let count = Math.round(settings.cubeCount); // Ensure integer
+            if (settings.arrangement === 'grid') {
+                // Adjust count to be a perfect cube if it's for grid, or just use as is
+                const side = Math.cbrt(count);
+                const sideInt = Math.round(side);
+                // If not a perfect cube, we might want to adjust count or log a warning.
+                // For simplicity, we'll use sideInt^3 for grid arrangement.
+                count = sideInt * sideInt * sideInt;
+                settings.cubeCount = count; // Update settings if adjusted
+                // TODO: Update GUI if settings.cubeCount is changed programmatically
+            }
+
+
+            for (let i = 0; i < count; i++) {
+                const cube = new THREE.Mesh(cubeGeom, subCubeMaterial.clone()); // Clone material for individual color later if needed
+                cube.userData.initialPosition = new THREE.Vector3();
+                cube.userData.initialRotation = new THREE.Euler();
+                cube.userData.initialScale = new THREE.Vector3(1, 1, 1);
+
+                let x, y, z;
+                const scale = settings.overallScale;
+
+                switch (settings.arrangement) {
+                    case 'sphere':
+                        const phi = Math.acos(-1 + (2 * i) / (count -1 + Number.EPSILON) ); // Distribute points more evenly on sphere
+                        const theta = Math.sqrt(count * Math.PI) * phi;
+                        x = scale * Math.sin(phi) * Math.cos(theta);
+                        y = scale * Math.sin(phi) * Math.sin(theta);
+                        z = scale * Math.cos(phi);
+                        break;
+                    case 'random':
+                        x = (Math.random() - 0.5) * 2 * scale;
+                        y = (Math.random() - 0.5) * 2 * scale;
+                        z = (Math.random() - 0.5) * 2 * scale;
+                        break;
+                    case 'grid':
+                    default:
+                        const sideLength = Math.cbrt(count);
+                        const layer = Math.floor(i / (sideLength * sideLength));
+                        const rowInLayer = Math.floor((i % (sideLength * sideLength)) / sideLength);
+                        const colInRow = (i % (sideLength * sideLength)) % sideLength;
+
+                        // Center the grid
+                        const offset = (sideLength - 1) / 2;
+                        x = (colInRow - offset) * (scale / Math.max(1, sideLength -1) );
+                        y = (rowInLayer - offset) * (scale / Math.max(1, sideLength -1) );
+                        z = (layer - offset) * (scale / Math.max(1, sideLength -1) );
+                        if (sideLength === 1) { // Handle single cube case
+                            x = y = z = 0;
+                        }
+                        break;
+                }
+                cube.position.set(x, y, z);
+                cube.userData.initialPosition.copy(cube.position);
+
+                group.add(cube);
+                group.userData.subCubes.push(cube);
+            }
+             // No geometry.dispose() needed for the group itself
+        }
         // --- Point Cloud Specific ---
-        if (type === 'pointcloud') {
+        else if (type === 'pointcloud') {
+            const geometry = groupOrGeometry.geometry; // instance is Mesh/Points
             const positions = geometry.attributes.position.array;
             const initialPositions = geometry.userData.initialPositions;
             const particleCount = settings.particleCount;
@@ -771,8 +931,26 @@ export class ObjectManager {
 
             // Remove from scene and dispose
             this.scene.remove(instanceToDelete);
-            if (instanceToDelete.geometry) instanceToDelete.geometry.dispose();
-            if (instanceToDelete.material) instanceToDelete.material.dispose();
+
+            if (instanceToDelete.userData.settings.type === 'dancingcubes') {
+                // Dispose of sub-cube geometries and materials
+                instanceToDelete.userData.subCubes.forEach(cube => {
+                    if (cube.geometry) cube.geometry.dispose();
+                    if (cube.material) {
+                        // If materials were cloned per cube, dispose them.
+                        // If a shared material was used and modified, more complex logic might be needed.
+                        // Based on current `resetObjectInitialGeometry`, materials are cloned.
+                        cube.material.dispose();
+                    }
+                });
+                // The main BoxGeometry used for cloning sub-cubes was created in resetObjectInitialGeometry
+                // and is not stored directly on the group, so it goes out of scope.
+                // The group itself (instanceToDelete) doesn't have a .geometry or .material to dispose.
+            } else {
+                // Standard disposal for non-group objects
+                if (instanceToDelete.geometry) instanceToDelete.geometry.dispose();
+                if (instanceToDelete.material) instanceToDelete.material.dispose();
+            }
 
             // Remove from instance array
             this.instances.splice(index, 1);
@@ -971,7 +1149,7 @@ export class ObjectManager {
 
     // --- Update Logic ---
 
-    updateObject(instance, audioManager, motionScore, cameraSettings) {
+    updateObject(instance, audioManager, motionScore, cameraSettings, deltaTime) { // Added deltaTime
         const settings = instance.userData.settings;
         if (!settings.visible) return;
 
@@ -979,19 +1157,117 @@ export class ObjectManager {
 
         // Geometry/Color updates based on audio/motion
         if (type === 'grid') {
-            this.updateGridGeometry(instance, audioManager, motionScore, cameraSettings);
+            this.updateGridGeometry(instance, audioManager, motionScore, cameraSettings); // Assuming deltaTime not needed here based on its impl.
         } else if (type === 'pointcloud') {
-            this.updatePointCloudGeometry(instance, audioManager, motionScore, cameraSettings);
+            this.updatePointCloudGeometry(instance, audioManager, motionScore, cameraSettings); // Assuming deltaTime not needed here
         } else if (type === 'sphere') {
-            this.updateSphereGeometry(instance, audioManager, motionScore, cameraSettings);
+            this.updateSphereGeometry(instance, audioManager, motionScore, cameraSettings); // Assuming deltaTime not needed here
         } else if (type === 'torus') {
-            this.updateTorusGeometry(instance, audioManager, motionScore, cameraSettings);
+            this.updateTorusGeometry(instance, audioManager, motionScore, cameraSettings); // Assuming deltaTime not needed here
         } else if (type === 'torusknot') {
-            this.updateTorusKnotGeometry(instance, audioManager, motionScore, cameraSettings);
+            this.updateTorusKnotGeometry(instance, audioManager, motionScore, cameraSettings); // Assuming deltaTime not needed here
+        } else if (type === 'dancingcubes') {
+            this.updateDancingCubesGeometry(instance, audioManager, motionScore, cameraSettings, deltaTime); // Pass deltaTime
         }
     }
 
     // --- Geometry Update Functions ---
+
+    updateDancingCubesGeometry(groupInstance, audioManager, motionScore, cameraSettings, deltaTime) { // Added deltaTime
+        const settings = groupInstance.userData.settings;
+        const subCubes = groupInstance.userData.subCubes;
+        if (!subCubes || subCubes.length === 0) return;
+
+        const averageAmplitude = audioManager.getAverageAmplitude(settings.frequencyRange);
+        const normalizedAvgAmp = averageAmplitude / 255;
+
+        // Effective influence incorporating motion
+        let effectiveAudioInfluence = settings.audioInfluence;
+        if (cameraSettings.cameraMotionEnabled && audioManager.audioContext && settings.motionInfluenceFactor > 0) {
+            const influence = motionScore * settings.motionInfluenceFactor;
+            effectiveAudioInfluence *= (1 + influence);
+        }
+
+        const time = performance.now() * 0.001;
+
+        // Frequency band data for color or specific effects
+        let lowAmpNorm = 0, midAmpNorm = 0, highAmpNorm = 0;
+        const useFreqBands = settings.colorMapping === 'frequencyBands' || settings.effectMode === 'combination'; // Example usage
+        if (useFreqBands && audioManager.audioContext) {
+            lowAmpNorm = audioManager.getAverageAmplitude('low') / 255;
+            midAmpNorm = audioManager.getAverageAmplitude('mid') / 255;
+            highAmpNorm = audioManager.getAverageAmplitude('high') / 255;
+        }
+        const tempColor = new THREE.Color();
+
+        subCubes.forEach((cube, index) => {
+            const initialPos = cube.userData.initialPosition;
+            // const initialRot = cube.userData.initialRotation;
+            // const initialScale = cube.userData.initialScale;
+
+            let audioFactor = normalizedAvgAmp; // Default audio factor
+            // Could vary audioFactor per cube based on index or position for more complex patterns
+            // e.g. audioFactor = (audioManager.getFrequencyData()[index % audioManager.getFrequencyData().length] || 0) / 255;
+
+            // --- Effects ---
+            const effectStrength = audioFactor * effectiveAudioInfluence;
+
+            if (settings.effectMode === 'scale' || settings.effectMode === 'combination') {
+                const scaleFactor = 1 + effectStrength * 1.5; // Scale up to 2.5x
+                cube.scale.set(scaleFactor, scaleFactor, scaleFactor);
+            } else {
+                cube.scale.copy(cube.userData.initialScale); // Reset if not scaling
+            }
+
+            if (settings.effectMode === 'rotate' || settings.effectMode === 'combination') {
+                const rotationSpeed = effectStrength * 2; // Radians per second based on audio
+                cube.rotation.x += rotationSpeed * deltaTime * (index % 3 === 0 ? 1 : 0.5);
+                cube.rotation.y += rotationSpeed * deltaTime * (index % 3 === 1 ? 1 : 0.5);
+                cube.rotation.z += rotationSpeed * deltaTime * (index % 3 === 2 ? 1 : 0.5);
+            } else {
+                 cube.rotation.set(0,0,0); // Or reset to initialRotation if stored and preferred
+            }
+
+            if (settings.effectMode === 'position' || settings.effectMode === 'combination') {
+                const posOffsetStrength = effectStrength * settings.overallScale * 0.2;
+                cube.position.x = initialPos.x + (Math.sin(time + index * 0.5) * posOffsetStrength);
+                cube.position.y = initialPos.y + (Math.cos(time + index * 0.3) * posOffsetStrength);
+                // cube.position.z = initialPos.z + (Math.sin(time + index * 0.7) * posOffsetStrength);
+            } else if (settings.effectMode !== 'scale' && settings.effectMode !== 'rotate') { // Avoid resetting if scale/rotate also active
+                cube.position.copy(initialPos);
+            }
+
+
+            // --- Color ---
+            let finalColor = settings.midColor; // Default
+            switch (settings.colorMapping) {
+                case 'audio':
+                    if (normalizedAvgAmp < 0.5) {
+                        tempColor.lerpColors(settings.lowColor, settings.midColor, normalizedAvgAmp * 2);
+                    } else {
+                        tempColor.lerpColors(settings.midColor, settings.highColor, (normalizedAvgAmp - 0.5) * 2);
+                    }
+                    finalColor = tempColor;
+                    break;
+                case 'frequencyBands':
+                    tempColor.setRGB(0,0,0);
+                    tempColor.lerp(settings.lowColor, lowAmpNorm);
+                    tempColor.lerp(settings.midColor, midAmpNorm);
+                    tempColor.lerp(settings.highColor, highAmpNorm);
+                    finalColor = tempColor;
+                    break;
+                case 'individual':
+                    // Example: color based on index - could be anything
+                    const hue = (index / subCubes.length) % 1.0;
+                    finalColor = tempColor.setHSL(hue, 0.8, 0.6);
+                    break;
+            }
+            cube.material.color.copy(finalColor);
+            if (cube.material.emissive) { // Check if material has emissive property
+                 cube.material.emissive.copy(finalColor).multiplyScalar(0.3);
+            }
+        });
+    }
 
     updateGridGeometry(grid, audioManager, motionScore, cameraSettings) {
         const settings = grid.userData.settings;

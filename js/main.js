@@ -96,6 +96,45 @@ const fxaaPass = new ShaderPass(FXAAShader);
 fxaaPass.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
 composer.addPass(fxaaPass);
 
+// --- Film Grain Pass ---
+const FilmGrainShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        intensity: { value: 0.05 },
+        time: { value: 0.0 },
+        speed: { value: 0.5 } // Added speed uniform
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float intensity;
+        uniform float time;
+        uniform float speed; // Added speed uniform
+        varying vec2 vUv;
+
+        float random(vec2 st) {
+            return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+        }
+
+        void main() {
+            vec4 color = texture2D(tDiffuse, vUv);
+            float grain = (random(vUv + mod(time * speed, 1.0)) * 2.0 - 1.0) * intensity; // Modulate random by time * speed
+            color.rgb += grain;
+            gl_FragColor = color;
+        }
+    `
+};
+const filmGrainPass = new ShaderPass(FilmGrainShader);
+filmGrainPass.enabled = false; // Start disabled
+composer.addPass(filmGrainPass);
+// --- End Film Grain Pass ---
+
 
 // --- Lighting ---
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
@@ -114,6 +153,8 @@ const settings = {
     transformMode: 'translate',
     autoRotateSpeed: orbitControls.autoRotateSpeed,
     globalBackgroundColor: scene.background.getHex(),
+    skyboxEnabled: false,
+    currentSkybox: 'None',
     // Post Processing Settings
     bloomStrength: bloomPass.strength,
     bloomThreshold: bloomPass.threshold,
@@ -122,12 +163,16 @@ const settings = {
     pixelateEnabled: true,
     fxaaEnabled: true,
     pixelSize: pixelatePass.uniforms.pixelSize.value,
+    filmGrainEnabled: false,
+    filmGrainIntensity: 0.05,
+    filmGrainSpeed: 0.5,
     // Instance Management Functions (bound to GUI)
     addGrid: () => objectManager.addInstance('grid'),
     addPointCloud: () => objectManager.addInstance('pointcloud'),
     addSphere: () => objectManager.addInstance('sphere'),
     addTorus: () => objectManager.addInstance('torus'),
     addTorusKnot: () => objectManager.addInstance('torusknot'),
+    addDancingCubes: () => objectManager.addInstance('dancingcubes'),
     deleteCurrent: () => objectManager.deleteCurrent(),
 };
 
@@ -196,7 +241,88 @@ function switchTab(name) {
 // Global Settings Folder
 const globalFolder = gui.addFolder('Global Settings');
 guiFolders['Global'] = { folder: globalFolder }; // Register folder (button added later)
-globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
+globalFolder.addColor(settings, 'globalBackgroundColor').name('Background Color').onChange(val => {
+    if (!settings.skyboxEnabled) { // Only update if skybox is not enabled
+        scene.background = new THREE.Color(val);
+    }
+});
+globalFolder.add(settings, 'skyboxEnabled').name('Enable Skybox').onChange(updateSkybox);
+
+// --- Skybox Management ---
+const skyboxes = {
+    'None': null,
+    'Sunny': [
+        'https://www.humus.name/Textures/Sunny/posx.jpg', 'https://www.humus.name/Textures/Sunny/negx.jpg',
+        'https://www.humus.name/Textures/Sunny/posy.jpg', 'https://www.humus.name/Textures/Sunny/negy.jpg',
+        'https://www.humus.name/Textures/Sunny/posz.jpg', 'https://www.humus.name/Textures/Sunny/negz.jpg'
+    ],
+    'Space': [ // Example, replace with actual URLs if you have another set
+        'https://www.humus.name/Textures/StPeters/posx.jpg', 'https://www.humus.name/Textures/StPeters/negx.jpg',
+        'https://www.humus.name/Textures/StPeters/posy.jpg', 'https://www.humus.name/Textures/StPeters/negy.jpg',
+        'https://www.humus.name/Textures/StPeters/posz.jpg', 'https://www.humus.name/Textures/StPeters/negz.jpg'
+    ]
+    // Add more skyboxes here
+};
+let skyboxTexture = null;
+const cubeTextureLoader = new THREE.CubeTextureLoader();
+
+function loadSkybox(name) {
+    if (skyboxes[name]) {
+        cubeTextureLoader.load(skyboxes[name], (texture) => {
+            skyboxTexture = texture;
+            if (settings.skyboxEnabled) {
+                scene.background = skyboxTexture;
+            }
+            console.log(`Skybox "${name}" loaded.`);
+        }, undefined, (err) => {
+            console.error(`Error loading skybox "${name}":`, err);
+            settings.currentSkybox = 'None'; // Revert if loading failed
+            if (skyboxNameController) skyboxNameController.updateDisplay();
+            updateSkybox(settings.skyboxEnabled); // Refresh background
+        });
+    } else {
+        skyboxTexture = null; // Clear current texture
+        if (settings.skyboxEnabled) { // Only revert to color if skybox was meant to be active
+            scene.background = new THREE.Color(settings.globalBackgroundColor);
+        }
+        console.log("Skybox set to None.");
+    }
+}
+
+function updateSkybox(enabled) {
+    if (enabled) {
+        if (settings.currentSkybox !== 'None' && skyboxTexture) {
+            scene.background = skyboxTexture;
+        } else if (settings.currentSkybox !== 'None' && !skyboxTexture) {
+            // Skybox selected but not loaded yet, trigger load
+            loadSkybox(settings.currentSkybox);
+        } else { // Skybox enabled but set to 'None' or texture missing
+            scene.background = new THREE.Color(settings.globalBackgroundColor); // Fallback to color
+        }
+        if (backgroundColorController) backgroundColorController.domElement.style.pointerEvents = 'none';
+        if (backgroundColorController) backgroundColorController.domElement.style.opacity = 0.5;
+    } else {
+        scene.background = new THREE.Color(settings.globalBackgroundColor);
+        if (backgroundColorController) backgroundColorController.domElement.style.pointerEvents = 'auto';
+        if (backgroundColorController) backgroundColorController.domElement.style.opacity = 1.0;
+    }
+}
+
+const skyboxNameController = globalFolder.add(settings, 'currentSkybox', Object.keys(skyboxes)).name('Skybox Texture')
+    .onChange(loadSkybox)
+    .listen(); // Listen for programmatic changes
+
+// Initial skybox load if one is pre-selected (and not 'None')
+if (settings.currentSkybox !== 'None') {
+    loadSkybox(settings.currentSkybox);
+}
+updateSkybox(settings.skyboxEnabled); // Initialize based on current settings
+
+// Keep a reference to the background color controller to enable/disable it
+const backgroundColorController = globalFolder.__controllers.find(c => c.property === 'globalBackgroundColor');
+// --- End Skybox Management ---
+
+
 globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
     .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
@@ -416,6 +542,11 @@ ppFolder.add(settings, 'bloomEnabled').name("Bloom").onChange(val => bloomPass.e
 ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength = val);
 ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
 ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
+// Film Grain Controls
+ppFolder.add(settings, 'filmGrainEnabled').name("Film Grain").onChange(val => filmGrainPass.enabled = val);
+ppFolder.add(settings, 'filmGrainIntensity', 0, 0.5).step(0.01).name("Grain Intensity").onChange(val => filmGrainPass.uniforms.intensity.value = val);
+ppFolder.add(settings, 'filmGrainSpeed', 0, 2).step(0.1).name("Grain Speed").onChange(val => filmGrainPass.uniforms.speed.value = val);
+
 
 // Instance Management Folder
 const instanceManagement = gui.addFolder('Instances');
@@ -425,6 +556,7 @@ instanceManagement.add(settings, 'addPointCloud').name("Add Point Cloud");
 instanceManagement.add(settings, 'addSphere').name("Add Sphere");
 instanceManagement.add(settings, 'addTorus').name("Add Torus");
 instanceManagement.add(settings, 'addTorusKnot').name("Add Torus Knot");
+instanceManagement.add(settings, 'addDancingCubes').name("Add Dancing Cubes");
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
 
 
@@ -517,6 +649,11 @@ function animate(timestamp) {
     const deltaTime = (timestamp - lastTimestamp) * 0.001 || 0; // Delta time in seconds, handle first frame
     lastTimestamp = timestamp;
 
+    // Update film grain time uniform
+    if (filmGrainPass.enabled) {
+        filmGrainPass.uniforms.time.value += deltaTime;
+    }
+
     // --- Get Motion Score ---
     let motionScore = 0;
     const visualizerEnabled = visualizerSettings.enableVisualizer;
@@ -563,7 +700,7 @@ function animate(timestamp) {
         }
 
         // Update geometry based on audio/motion
-        objectManager.updateObject(instance, audioManager, motionScore, cameraSettings);
+        objectManager.updateObject(instance, audioManager, motionScore, cameraSettings, deltaTime);
     });
 
     orbitControls.update(); // Update orbit controls
