@@ -11,6 +11,7 @@ import { ObjectManager } from './ObjectManager.js'; // Import ObjectManager
 import { AudioManager } from './AudioManager.js';
 import { CameraManager } from './CameraManager.js';
 import { CameraVisualizer } from './CameraVisualizer.js';
+import { PortalManager } from './PortalManager.js'; // Import PortalManager
 // GridManager is no longer used.
 
 // --- Constants ---
@@ -55,8 +56,11 @@ const cameraVisualizer = new CameraVisualizer(scene, cameraManager, audioManager
     rotation: new THREE.Euler(0, 0, 0),
     scale: new THREE.Vector3(1, 1, 1),
 });
+const portalManager = new PortalManager(scene, renderer, camera, objectManager); // Instantiate PortalManager, pass objectManager
 
 // --- Post Processing ---
+// If using PortalManager's custom render loop, composer might need adjustments or be used selectively.
+// For now, let's assume portals are rendered before post-processing.
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 
@@ -576,6 +580,11 @@ instanceManagement.add(settings, 'addTorus').name("Add Torus");
 instanceManagement.add(settings, 'addTorusKnot').name("Add Torus Knot");
 instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
 
+// --- Portal Controls Tab ---
+const portalControlsFolder = portalManager.addGuiControls(gui); // Add portal controls to main GUI
+guiFolders['Portals'] = { folder: portalControlsFolder }; // Register folder for tab management
+addTab('Portals', portalControlsFolder); // Add a tab for Portals
+
 
 // --- Finalize Tab Setup ---
 // Add buttons for registered folders
@@ -584,6 +593,7 @@ addTab('Sources', audioCameraFolder);
 addTab('Visualizer', visualizerFolder); // Add Visualizer tab
 addTab('Effects', ppFolder);
 addTab('Instances', instanceManagement); // Keep instance management separate
+// addTab('Portals', portalControlsFolder); // Already added above for registration
 
 // Activate the first tab initially
 switchTab('Global');
@@ -668,6 +678,7 @@ window.addEventListener('resize', () => {
     pixelatePass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
     fxaaPass.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
     updateBackground(); // Update background on resize for gradients and image cover/stretch
+    portalManager.onWindowResize(); // Notify PortalManager of resize
 });
 
 // --- Core Logic Functions ---
@@ -733,7 +744,8 @@ function animate(timestamp) {
 
     orbitControls.update(); // Update orbit controls
 
-    composer.render(); // Render scene with post-processing
+    // composer.render(); // Render scene with post-processing - Replaced by PortalManager render
+    portalManager.render(scene, camera); // Use PortalManager's render method
 }
 
 // --- Initialization ---
