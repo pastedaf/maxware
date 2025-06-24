@@ -202,18 +202,22 @@ function switchTab(name) {
 
 // --- Create GUI Folders ---
 
-// Global Settings Folder
-const globalFolder = gui.addFolder('Global Settings');
-guiFolders['Global'] = { folder: globalFolder }; // Register folder (button added later)
-globalFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
-globalFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
+// Global Settings Folder (will now be called "Scene & Effects")
+const sceneEffectsFolder = gui.addFolder('Scene & Effects');
+guiFolders['Scene'] = { folder: sceneEffectsFolder }; // Register folder (button added later)
+
+// --- Scene Sub-folder ---
+const sceneFolder = sceneEffectsFolder.addFolder('Scene Controls');
+sceneFolder.addColor(settings, 'globalBackgroundColor').name('Background').onChange(val => scene.background.setHex(val));
+sceneFolder.add(settings, 'transformMode', ['translate', 'rotate', 'scale'])
     .name("Transform Mode")
     .onChange(val => objectManager.setTransformMode(val)); // Use objectManager
-globalFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate");
-globalFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
+sceneFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate");
+sceneFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
+// sceneFolder.open(); // Optional: Keep scene controls open by default
 
-// Lighting Controls in Global Folder
-const lightingFolder = globalFolder.addFolder('Lighting');
+// Lighting Controls in Scene Sub-folder
+const lightingFolder = sceneFolder.addFolder('Lighting');
 lightingFolder.add(ambientLight, 'intensity', 0, 2).name('Ambient Intensity');
 const dirLightFolder = lightingFolder.addFolder('Directional Light');
 dirLightFolder.add(directionalLight, 'visible');
@@ -221,7 +225,6 @@ dirLightFolder.add(directionalLight, 'intensity', 0, 2);
 dirLightFolder.add(directionalLight.position, 'x', -20, 20).name('Pos X');
 dirLightFolder.add(directionalLight.position, 'y', -20, 20).name('Pos Y');
 dirLightFolder.add(directionalLight.position, 'z', -20, 20).name('Pos Z');
-// dirLightFolder.open();
 
 const pLight1Folder = lightingFolder.addFolder('Point Light 1 (Warm)');
 pLight1Folder.add(pointLight1, 'visible');
@@ -229,7 +232,6 @@ pLight1Folder.add(pointLight1, 'intensity', 0, 2);
 pLight1Folder.add(pointLight1.position, 'x', -30, 30).name('Pos X');
 pLight1Folder.add(pointLight1.position, 'y', -30, 30).name('Pos Y');
 pLight1Folder.add(pointLight1.position, 'z', -30, 30).name('Pos Z');
-// pLight1Folder.open();
 
 const pLight2Folder = lightingFolder.addFolder('Point Light 2 (Cool)');
 pLight2Folder.add(pointLight2, 'visible');
@@ -237,12 +239,22 @@ pLight2Folder.add(pointLight2, 'intensity', 0, 2);
 pLight2Folder.add(pointLight2.position, 'x', -30, 30).name('Pos X');
 pLight2Folder.add(pointLight2.position, 'y', -30, 30).name('Pos Y');
 pLight2Folder.add(pointLight2.position, 'z', -30, 30).name('Pos Z');
-// pLight2Folder.open();
-
-// lightingFolder.open(); // Optional: Keep lighting folder open by default
+// lightingFolder.open();
 
 
-// Audio & Camera Folder
+// --- Post Processing Sub-folder (within Scene & Effects) ---
+const ppFolder = sceneEffectsFolder.addFolder('Post Processing Effects');
+ppFolder.add(settings, 'pixelateEnabled').name("Pixelate").onChange(val => pixelatePass.enabled = val);
+ppFolder.add(settings, 'pixelSize', 1, 32).step(1).onChange(val => pixelatePass.uniforms.pixelSize.value = val);
+ppFolder.add(settings, 'fxaaEnabled').name("FXAA").onChange(val => fxaaPass.enabled = val);
+ppFolder.add(settings, 'bloomEnabled').name("Bloom").onChange(val => bloomPass.enabled = val);
+ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength = val);
+ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
+ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
+// ppFolder.open(); // Optional: Keep effects open
+
+
+// Audio & Camera Folder (remains a separate top-level tab)
 const audioCameraFolder = gui.addFolder('Audio & Camera');
 guiFolders['Sources'] = { folder: audioCameraFolder }; // Register folder
 // --- Audio Source Controls ---
@@ -445,16 +457,8 @@ if (cameraVisualizer.isInitialized) {
 }
 
 
-// Post Processing Folder
-const ppFolder = gui.addFolder('Post Processing');
-guiFolders['Effects'] = { folder: ppFolder }; // Register folder
-ppFolder.add(settings, 'pixelateEnabled').name("Pixelate").onChange(val => pixelatePass.enabled = val);
-ppFolder.add(settings, 'pixelSize', 1, 32).step(1).onChange(val => pixelatePass.uniforms.pixelSize.value = val);
-ppFolder.add(settings, 'fxaaEnabled').name("FXAA").onChange(val => fxaaPass.enabled = val);
-ppFolder.add(settings, 'bloomEnabled').name("Bloom").onChange(val => bloomPass.enabled = val);
-ppFolder.add(settings, 'bloomStrength', 0, 3).onChange(val => bloomPass.strength = val);
-ppFolder.add(settings, 'bloomThreshold', 0, 1).onChange(val => bloomPass.threshold = val);
-ppFolder.add(settings, 'bloomRadius', 0, 1).onChange(val => bloomPass.radius = val);
+// ppFolder is now a sub-folder of sceneEffectsFolder, so no separate top-level folder needed here.
+// guiFolders['Effects'] registration is removed as it's no longer a top-level tab.
 
 // Instance Management Folder
 const instanceManagement = gui.addFolder('Instances');
@@ -469,14 +473,14 @@ instanceManagement.add(settings, 'deleteCurrent').name("Delete Selected");
 
 // --- Finalize Tab Setup ---
 // Add buttons for registered folders
-addTab('Global', globalFolder);
+addTab('Scene', sceneEffectsFolder); // Renamed from 'Global' and now contains effects
 addTab('Sources', audioCameraFolder);
-addTab('Visualizer', visualizerFolder); // Add Visualizer tab
-addTab('Effects', ppFolder);
-addTab('Instances', instanceManagement); // Keep instance management separate
+addTab('Visualizer', visualizerFolder);
+// addTab('Effects', ppFolder); // Removed as ppFolder is now a sub-folder
+addTab('Instances', instanceManagement);
 
 // Activate the first tab initially
-switchTab('Global');
+switchTab('Scene'); // Switch to the new 'Scene' tab
 // --- End GUI Setup ---
 
 

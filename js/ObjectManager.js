@@ -156,6 +156,18 @@ export class ObjectManager {
         this.boundOnPointerDown = null;
         this.boundOnPointerMove = null;
         this.boundOnPointerUp = null;
+        this.boundOnContextMenu = null; // For right-click
+        this.boundOnWindowClick = null; // For hiding context menu
+
+        // Context Menu
+        this.contextMenu = document.getElementById('customContextMenu');
+        this.contextMenuTarget = null; // The object that was right-clicked
+        this._setupContextMenuListeners();
+
+        // For hover effect
+        this.hoveredObject = null;
+        this.originalEmissive = new THREE.Color();
+        this.hoverEmissiveColor = new THREE.Color(0x555555); // Dark grey emissive for hover
     }
 
     _deepCloneSettings(sourceSettings, type) {
@@ -1068,6 +1080,7 @@ export class ObjectManager {
             // console.log(`[ObjectManager] Deselected instance: ${this.currentInstance.uuid}`);
             this.currentInstance = null;
         }
+        this._resetHoverEffect(); // Also reset hover effect on deselect
     }
 
     // --- Interaction Logic (moved from main.js) ---
@@ -1092,10 +1105,40 @@ export class ObjectManager {
         // OrbitControls handles camera drag when not dragging the gizmo.
         // TransformControls handles gizmo drag internally.
 
-        // Update pointer coordinates for potential use (e.g., hover effects if added later)
+        // Update pointer coordinates for raycasting
         this.pointer.x = (event.clientX / this.rendererElement.clientWidth) * 2 - 1;
         this.pointer.y = -(event.clientY / this.rendererElement.clientHeight) * 2 + 1;
+
+        // Hover effect logic
+        if (!this.transformControls || !this.transformControls.dragging) { // Don't interfere if dragging gizmo
+            this.raycaster.setFromCamera(this.pointer, this.camera);
+            const intersects = this.raycaster.intersectObjects(this.instances, false);
+
+            if (intersects.length > 0) {
+                const firstIntersected = intersects[0].object;
+                if (this.hoveredObject !== firstIntersected) {
+                    this._resetHoverEffect(); // Reset previous hover
+                    if (firstIntersected.material && firstIntersected.material.emissive) {
+                        this.hoveredObject = firstIntersected;
+                        this.originalEmissive.copy(this.hoveredObject.material.emissive);
+                        this.hoveredObject.material.emissive.set(this.hoverEmissiveColor);
+                    }
+                }
+            } else {
+                this._resetHoverEffect();
+            }
+        } else { // If dragging, ensure no hover effect is active
+            this._resetHoverEffect();
+        }
     }
+
+    _resetHoverEffect() {
+        if (this.hoveredObject && this.hoveredObject.material && this.hoveredObject.material.emissive) {
+            this.hoveredObject.material.emissive.copy(this.originalEmissive);
+        }
+        this.hoveredObject = null;
+    }
+
 
     onPointerUp(event) {
         // Ignore events originating from the GUI
@@ -1188,6 +1231,19 @@ export class ObjectManager {
         this.rendererElement.addEventListener('pointerup', this.boundOnPointerUp);
         console.log("[ObjectManager] Interaction listeners added to renderer element.");
 
+        // Add context menu listener to the renderer element
+        this.boundOnContextMenu = this.onContextMenu.bind(this);
+        this.rendererElement.addEventListener('contextmenu', this.boundOnContextMenu);
+        console.log("[ObjectManager] Context menu listener added to renderer element.");
+
+        // Listener to hide context menu when clicking elsewhere
+        this.boundOnWindowClick = (event) => {
+            if (this.contextMenu.style.display === 'block' && !this.contextMenu.contains(event.target)) {
+                this.hideContextMenu();
+            }
+        };
+        window.addEventListener('click', this.boundOnWindowClick);
+
 
         // Select the first instance if available after setup
         if (this.instances.length > 0) {
@@ -1197,6 +1253,147 @@ export class ObjectManager {
             this.transformControls.detach(); // Detach should hide gizmo
         }
     }
+
+    // --- Context Menu Logic ---
+    _setupContextMenuListeners() {
+        if (!this.contextMenu) return;
+        this.contextMenu.querySelectorAll('li[data-action]').forEach(item => {
+            item.addEventListener('click', (e) => {
+                const action = e.target.getAttribute('data-action');
+                this.handleContextMenuAction(action);
+                this.hideContextMenu();
+            });
+        });
+    }
+
+    showContextMenu(event, targetObject) {
+        event.preventDefault();
+        this.contextMenuTarget = targetObject; // Store the target object
+        this.contextMenu.style.left = `${event.clientX}px`;
+        this.contextMenu.style.top = `${event.clientY}px`;
+        this.contextMenu.style.display = 'block';
+
+        // Update context menu based on targetObject's state (e.g., "Disable Auto-Rotate")
+        if (targetObject && targetObject.userData.settings) {
+            const autoRotateItem = this.contextMenu.querySelector('li[data-action="toggleAutoRotate"]');
+            if (autoRotateItem) {
+                autoRotateItem.textContent = targetObject.userData.settings.autoRotate ? "Disable Auto-Rotate" : "Enable Auto-Rotate";
+            }
+        }
+    }
+
+    hideContextMenu() {
+        this.contextMenu.style.display = 'none';
+        this.contextMenuTarget = null;
+    }
+
+    onContextMenu(event) {
+        event.preventDefault(); // Prevent default browser context menu
+
+        // Ignore events originating from the GUI
+        if (event.target.closest('.dg')) return;
+
+        // Raycast to find the object under the mouse
+        this.pointer.x = (event.clientX / this.rendererElement.clientWidth) * 2 - 1;
+        this.pointer.y = -(event.clientY / this.rendererElement.clientHeight) * 2 + 1;
+        this.raycaster.setFromCamera(this.pointer, this.camera);
+
+        const intersects = this.raycaster.intersectObjects(this.instances, false);
+
+        if (intersects.length > 0) {
+            const rightClickedObject = intersects[0].object;
+            // Select the instance if it's not already selected
+            if (this.currentInstance !== rightClickedObject) {
+                this.selectInstance(rightClickedObject);
+            }
+            this.showContextMenu(event, rightClickedObject);
+        } else {
+            // Clicked on empty space, hide context menu if it was open
+            this.hideContextMenu();
+        }
+    }
+
+    handleContextMenuAction(action) {
+        if (!this.contextMenuTarget) return; // Should have a target if menu was shown for an object
+
+        const target = this.contextMenuTarget; // Use the stored target
+
+        switch (action) {
+            case 'focus':
+                this.focusObject(target);
+                break;
+            case 'duplicate':
+                this.duplicateObject(target);
+                break;
+            case 'toggleAutoRotate':
+                if (target.userData.settings) {
+                    target.userData.settings.autoRotate = !target.userData.settings.autoRotate;
+                    // Update GUI if this setting is directly controlled by a dat.gui controller
+                    const arController = target.userData.controllers.find(c => c.property === 'autoRotate');
+                    if (arController) arController.updateDisplay();
+                }
+                break;
+            case 'resetSettings':
+                this.resetToDefaults(target);
+                break;
+            case 'delete':
+                // Ensure the object to be deleted is the currentInstance for deleteCurrent to work as expected
+                if (this.currentInstance !== target) {
+                    this.selectInstance(target); // This will also attach transform controls
+                }
+                this.deleteCurrent(); // deleteCurrent handles detaching controls and selecting next
+                break;
+            default:
+                console.warn(`Unknown context menu action: ${action}`);
+        }
+    }
+
+    focusObject(object) {
+        if (!object || !this.camera || !this.orbitControls) return;
+
+        // Get bounding box of the object
+        const boundingBox = new THREE.Box3().setFromObject(object);
+        const center = boundingBox.getCenter(new THREE.Vector3());
+        const size = boundingBox.getSize(new THREE.Vector3());
+
+        // Calculate distance to frame the object
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const fov = this.camera.fov * (Math.PI / 180);
+        let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+        cameraZ *= 1.5; // Add some padding
+
+        // Set orbit controls target
+        this.orbitControls.target.copy(center);
+
+        // Position camera
+        // Simplistic positioning: along the current camera direction towards the object's center
+        const direction = new THREE.Vector3().subVectors(this.camera.position, this.orbitControls.target).normalize();
+        this.camera.position.copy(center).addScaledVector(direction, cameraZ);
+
+        this.orbitControls.update();
+        console.log(`Focused on object: ${object.uuid}`);
+    }
+
+    duplicateObject(originalObject) {
+        if (!originalObject || !originalObject.userData.settings) return null;
+
+        const type = originalObject.userData.settings.type;
+        const newInstance = this.addInstance(type, originalObject); // Pass original as base
+
+        if (newInstance) {
+            // Offset the new instance slightly to avoid z-fighting if at same position
+            newInstance.position.x += 1;
+            newInstance.position.y += 1;
+            // Update its settings to reflect its new position
+            newInstance.userData.settings.position.copy(newInstance.position);
+
+            console.log(`Duplicated object ${originalObject.uuid} to ${newInstance.uuid}`);
+            this.selectInstance(newInstance); // Select the new duplicated instance
+        }
+        return newInstance;
+    }
+    // --- End Context Menu Logic ---
+
 
     setTransformMode(mode) {
         if (this.transformControls) {
@@ -1798,11 +1995,16 @@ export class ObjectManager {
             this.rendererElement.removeEventListener('pointerdown', this.boundOnPointerDown);
             this.rendererElement.removeEventListener('pointermove', this.boundOnPointerMove);
             this.rendererElement.removeEventListener('pointerup', this.boundOnPointerUp);
-            console.log("[ObjectManager] Interaction listeners removed from renderer element.");
+            this.rendererElement.removeEventListener('contextmenu', this.boundOnContextMenu); // Remove context menu listener
+            console.log("[ObjectManager] Interaction and context menu listeners removed from renderer element.");
         }
+        window.removeEventListener('click', this.boundOnWindowClick); // Remove window click listener
+
         this.boundOnPointerDown = null;
         this.boundOnPointerMove = null;
         this.boundOnPointerUp = null;
+        this.boundOnContextMenu = null;
+        this.boundOnWindowClick = null;
         this.rendererElement = null;
         this.camera = null;
 
