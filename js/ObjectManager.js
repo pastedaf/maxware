@@ -1351,10 +1351,11 @@ export class ObjectManager {
         this.boundOnPointerMove = this.onPointerMove.bind(this);
         this.boundOnPointerUp = this.onPointerUp.bind(this);
 
-        this.rendererElement.addEventListener('pointerdown', this.boundOnPointerDown);
-        this.rendererElement.addEventListener('pointermove', this.boundOnPointerMove);
-        this.rendererElement.addEventListener('pointerup', this.boundOnPointerUp);
-        console.log("[ObjectManager] Interaction listeners added to renderer element.");
+        // Temporarily disable ObjectManager's own pointer listeners for game controls
+        // this.rendererElement.addEventListener('pointerdown', this.boundOnPointerDown);
+        // this.rendererElement.addEventListener('pointermove', this.boundOnPointerMove);
+        // this.rendererElement.addEventListener('pointerup', this.boundOnPointerUp);
+        // console.log("[ObjectManager] Interaction listeners (currently disabled for player controls).");
 
 
         // Select the first instance if available after setup
@@ -1962,7 +1963,7 @@ export class ObjectManager {
         console.log("Disposing ObjectManager...");
 
         // Remove event listeners added in setupTransformControls
-        if (this.rendererElement) {
+        if (this.rendererElement && this.boundOnPointerDown) { // Check if listeners were bound before removing
             this.rendererElement.removeEventListener('pointerdown', this.boundOnPointerDown);
             this.rendererElement.removeEventListener('pointermove', this.boundOnPointerMove);
             this.rendererElement.removeEventListener('pointerup', this.boundOnPointerUp);

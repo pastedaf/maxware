@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -29,11 +29,26 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 
 // --- Controls ---
-const orbitControls = new OrbitControls(camera, renderer.domElement);
-orbitControls.enableDamping = true;
-orbitControls.dampingFactor = 0.05;
-orbitControls.autoRotate = false;
-orbitControls.autoRotateSpeed = 1.0;
+// const orbitControls = new OrbitControls(camera, renderer.domElement);
+// orbitControls.enableDamping = true;
+// orbitControls.dampingFactor = 0.05;
+// orbitControls.autoRotate = false;
+// orbitControls.autoRotateSpeed = 1.0;
+
+let playerControls;
+const moveState = {
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    up: false, // For potential fly mode/jumping
+    down: false
+};
+const playerVelocity = new THREE.Vector3();
+const playerDirection = new THREE.Vector3();
+const playerMoveSpeed = 50.0; // Adjusted speed for noticeable movement
+const playerLookSpeed = 2.0; // Not directly used by PointerLockControls, but good to have
+
 
 // --- GUI ---
 const gui = new dat.GUI({ autoPlace: false }); // Disable autoPlace
@@ -277,11 +292,11 @@ camera.lookAt(0, 0, 0);
 const settings = {
     // General View/Control Settings
     fov: camera.fov, // Added FOV
-    orbitControlsRotateSpeed: orbitControls.rotateSpeed, // Added OrbitControls Speeds
-    orbitControlsZoomSpeed: orbitControls.zoomSpeed,
-    orbitControlsPanSpeed: orbitControls.panSpeed,
+    // orbitControlsRotateSpeed: orbitControls.rotateSpeed, // Added OrbitControls Speeds
+    // orbitControlsZoomSpeed: orbitControls.zoomSpeed,
+    // orbitControlsPanSpeed: orbitControls.panSpeed,
     transformMode: 'translate',
-    autoRotateSpeed: orbitControls.autoRotateSpeed,
+    // autoRotateSpeed: orbitControls.autoRotateSpeed, // orbitControls is disabled
     // globalBackgroundColor: scene.background.getHex(), // Moved to backgroundSettings
     // Post Processing Settings
     bloomStrength: bloomPass.strength,
@@ -412,11 +427,11 @@ cameraFolder.add(settings, 'fov', 30, 120).name('FOV').onChange(val => {
     camera.fov = val;
     camera.updateProjectionMatrix();
 });
-cameraFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate");
-cameraFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val);
-cameraFolder.add(settings, 'orbitControlsRotateSpeed', 0.1, 5.0).name("Orbit Rotate Speed Sens.").onChange(val => orbitControls.rotateSpeed = val);
-cameraFolder.add(settings, 'orbitControlsZoomSpeed', 0.1, 5.0).name("Orbit Zoom Speed Sens.").onChange(val => orbitControls.zoomSpeed = val);
-cameraFolder.add(settings, 'orbitControlsPanSpeed', 0.1, 5.0).name("Orbit Pan Speed Sens.").onChange(val => orbitControls.panSpeed = val);
+// cameraFolder.add(orbitControls, 'autoRotate').name("Orbit Auto Rotate"); // orbitControls is disabled
+// cameraFolder.add(settings, 'autoRotateSpeed', 0.1, 10).name("Orbit Rotate Speed").onChange(val => orbitControls.autoRotateSpeed = val); // orbitControls is disabled
+// cameraFolder.add(settings, 'orbitControlsRotateSpeed', 0.1, 5.0).name("Orbit Rotate Speed Sens.").onChange(val => orbitControls.rotateSpeed = val); // orbitControls is disabled
+// cameraFolder.add(settings, 'orbitControlsZoomSpeed', 0.1, 5.0).name("Orbit Zoom Speed Sens.").onChange(val => orbitControls.zoomSpeed = val); // orbitControls is disabled
+// cameraFolder.add(settings, 'orbitControlsPanSpeed', 0.1, 5.0).name("Orbit Pan Speed Sens.").onChange(val => orbitControls.panSpeed = val); // orbitControls is disabled
 // cameraFolder.open();
 
 
@@ -869,6 +884,67 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 
 // Interaction listeners are now handled within ObjectManager.js
 
+// --- Player Controls Setup ---
+function setupPlayerControls() {
+    playerControls = new PointerLockControls(camera, renderer.domElement);
+    scene.add(playerControls.getObject()); // Add camera to scene as it's controlled by PointerLockControls
+
+    // Instructions and Pointer Lock Activation
+    const instructions = document.createElement('div');
+    instructions.id = 'instructions';
+    instructions.style.position = 'absolute';
+    instructions.style.top = '50%';
+    instructions.style.left = '50%';
+    instructions.style.transform = 'translate(-50%, -50%)';
+    instructions.style.color = 'white';
+    instructions.style.fontSize = '24px';
+    instructions.style.textAlign = 'center';
+    instructions.style.backgroundColor = 'rgba(0,0,0,0.7)';
+    instructions.style.padding = '20px';
+    instructions.style.cursor = 'pointer';
+    instructions.innerHTML = 'Click to Play<br>(W,A,S,D = Move, MOUSE = Look)';
+    document.body.appendChild(instructions);
+
+    instructions.addEventListener('click', () => {
+        playerControls.lock();
+    });
+
+    playerControls.addEventListener('lock', () => {
+        instructions.style.display = 'none';
+        // Hide GUI when pointer is locked for immersive gameplay
+        guiContainer.style.display = 'none';
+    });
+
+    playerControls.addEventListener('unlock', () => {
+        instructions.style.display = 'block';
+        // Show GUI when pointer is unlocked
+        guiContainer.style.display = 'block';
+    });
+
+    // Keyboard listeners for movement
+    document.addEventListener('keydown', (event) => {
+        switch (event.code) {
+            case 'KeyW': moveState.forward = true; break;
+            case 'KeyS': moveState.backward = true; break;
+            case 'KeyA': moveState.left = true; break;
+            case 'KeyD': moveState.right = true; break;
+            // case 'Space': moveState.up = true; break; // Optional jump/fly
+            // case 'ShiftLeft': moveState.down = true; break; // Optional crouch/fly
+        }
+    });
+    document.addEventListener('keyup', (event) => {
+        switch (event.code) {
+            case 'KeyW': moveState.forward = false; break;
+            case 'KeyS': moveState.backward = false; break;
+            case 'KeyA': moveState.left = false; break;
+            case 'KeyD': moveState.right = false; break;
+            // case 'Space': moveState.up = false; break;
+            // case 'ShiftLeft': moveState.down = false; break;
+        }
+    });
+}
+
+
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -1093,15 +1169,125 @@ function animate(timestamp) {
         objectManager.updateObject(instance, audioManager, motionScore, cameraSettings);
     });
 
-    orbitControls.update(); // Update orbit controls
+    // orbitControls.update(); // OrbitControls is disabled
+    if (playerControls && playerControls.isLocked) {
+        playerDirection.z = Number(moveState.forward) - Number(moveState.backward);
+        playerDirection.x = Number(moveState.left) - Number(moveState.right);
+        playerDirection.normalize(); // this ensures consistent movements in all directions
+
+        const speedDelta = playerMoveSpeed * deltaTime;
+
+        if (moveState.forward || moveState.backward) {
+            playerVelocity.z -= playerDirection.z * speedDelta * 10;
+        }
+        if (moveState.left || moveState.right) {
+            playerVelocity.x -= playerDirection.x * speedDelta * 10;
+        }
+
+        // Apply movement
+        playerControls.moveRight(-playerVelocity.x * deltaTime);
+        playerControls.moveForward(-playerVelocity.z * deltaTime);
+
+        // Simple damping
+        playerVelocity.x *= 0.9;
+        playerVelocity.z *= 0.9;
+
+
+        // Ensure camera stays at a certain height (e.g. player height)
+        // This might be adjusted or made more sophisticated later with collision detection.
+        // playerControls.getObject().position.y = 2;
+    }
+
 
     composer.render(); // Render scene with post-processing
 }
 
 // --- Initialization ---
-objectManager.addInstance('grid'); // Add the initial grid
-// objectManager.addInstance('pointcloud'); // Optionally add a point cloud initially
-// objectManager.addInstance('sphere'); // Optionally add a sphere initially
-// objectManager.addInstance('torusknot'); // Optionally add a torus knot initially
-objectManager.setupTransformControls(camera, renderer, orbitControls); // Setup controls *after* first instance exists
+setupPlayerControls(); // Initialize player controls
+
+// Create a basic static level
+const groundGrid = objectManager.addInstance('grid');
+if (groundGrid) {
+    // Make the ground grid larger and flatter for a level
+    groundGrid.scale.set(5, 5, 1); // Scale it up (assuming default grid size is 15, so 75x75 units)
+    groundGrid.position.y = 0; // Ensure it's at ground level
+
+    const groundSettings = groundGrid.userData.settings;
+    groundSettings.wireframe = true;
+    groundSettings.heightScale = 0.2; // Flatter ground
+    groundSettings.lowColor.setHex(0x222222); // Dark grey
+    groundSettings.midColor.setHex(0x333333); // Medium grey
+    groundSettings.highColor.setHex(0x444444); // Light grey
+    // The grid's default rotation (Math.PI / 2 on X) is correct for a floor.
+}
+
+const sphere = objectManager.addInstance('sphere');
+if (sphere) {
+    sphere.position.set(10, 5, -15); // Position it in the scene
+    const sphereSettings = sphere.userData.settings;
+    sphereSettings.radius = 4;
+    sphereSettings.lowColor.setHex(0xff4444); // Reddish
+    sphereSettings.midColor.setHex(0xff8844);
+    sphereSettings.highColor.setHex(0xffcc44);
+    objectManager.resetObjectInitialGeometry(sphere); // Apply radius change
+}
+
+const torusKnot = objectManager.addInstance('torusknot');
+if (torusKnot) {
+    torusKnot.position.set(-15, 7, -10);
+    const tkSettings = torusKnot.userData.settings;
+    tkSettings.radius = 5;
+    tkSettings.tube = 1.8;
+    tkSettings.lowColor.setHex(0x4444ff); // Bluish
+    tkSettings.midColor.setHex(0x6666ff);
+    tkSettings.highColor.setHex(0x8888ff);
+    objectManager.resetObjectInitialGeometry(torusKnot); // Apply geometry changes
+}
+
+const pointCloudObj = objectManager.addInstance('pointcloud'); // Renamed to avoid conflict
+if (pointCloudObj) {
+    pointCloudObj.position.set(0, 12, 10);
+    const pcSettings = pointCloudObj.userData.settings;
+    pcSettings.particleCount = 8000;
+    pcSettings.distributionScale = 20;
+    pcSettings.particleSize = 0.25;
+    pcSettings.lowColor.setHex(0x44ff44); // Greenish
+    pcSettings.midColor.setHex(0x88ff88);
+    pcSettings.highColor.setHex(0xccffcc);
+    objectManager.resetObjectInitialGeometry(pointCloudObj); // Apply changes
+}
+
+// Adjust player starting position and orientation
+camera.position.set(0, 1.8, 25); // Start a bit above ground, looking towards origin (player height ~1.8)
+playerControls.getObject().position.copy(camera.position); // Sync PointerLockControls position
+// Optional: Make the player look towards the center or a specific object.
+// playerControls.getObject().lookAt(0, 1.8, 0); // Look at origin at player height
+
+// --- Basic Collision Detection Data ---
+const playerHeight = 1.8;
+const playerColliderRadius = 0.5; // Approximate player as a cylinder/capsule
+const groundBoundary = (GRID_SIZE * 5) / 2 - playerColliderRadius; // Ground grid was scaled by 5
+
+// Store collidable objects and their AABBs
+const collidableObjects = [];
+
+if (sphere) {
+    const sphereRadius = sphere.userData.settings.radius;
+    const sphereBox = new THREE.Box3().setFromObject(sphere); // Use THREE.Box3 to get AABB
+    collidableObjects.push({ mesh: sphere, boundingBox: sphereBox });
+}
+if (torusKnot) {
+    const tkBox = new THREE.Box3().setFromObject(torusKnot);
+    collidableObjects.push({ mesh: torusKnot, boundingBox: tkBox });
+}
+// Point clouds are not typically solid colliders, so we'll omit pointCloudObj for now.
+
+
+objectManager.setupTransformControls(camera, renderer, null /* orbitControls is removed */);
+// ObjectManager's transform controls will be disabled for now as per plan
+if (objectManager.transformControls) {
+    objectManager.transformControls.enabled = false;
+    objectManager.transformControls.visible = false;
+}
+
 animate(0); // Start the animation loop
