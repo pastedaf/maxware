@@ -164,4 +164,11 @@ export class AudioManager {
         const sum = data.reduce((acc, val) => acc + val, 0);
         return sum / data.length;
     }
+
+    getAudioBufferDuration() {
+        if (this.audioBuffer) {
+            return this.audioBuffer.duration;
+        }
+        return 0; // Or null, or throw error if no buffer
+    }
 }

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+// import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js'; // Replaced by PlayerController
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -11,11 +11,23 @@ import { ObjectManager } from './ObjectManager.js'; // Import ObjectManager
 import { AudioManager } from './AudioManager.js';
 import { CameraManager } from './CameraManager.js';
 import { CameraVisualizer } from './CameraVisualizer.js';
+import { PlayerController } from './PlayerController.js'; // Import PlayerController
+import { LevelGenerator } from './LevelGenerator.js'; // Import LevelGenerator
+import { MandelbrotShader } from './MandelbrotShader.js'; // Import MandelbrotShader
 
 // --- Constants ---
 const GRID_SIZE = 15; // Physical size for grids (used for initial grid and camera positioning)
 const GRID_SEGMENTS = 63; // Number of segments for grids (used for initial grid)
 const VIDEO_ELEMENT_ID = 'webcamFeed'; // ID of the video element in HTML
+const DEFAULT_GAME_DURATION = 120; // seconds, if no song is loaded
+
+// --- Game State Variables ---
+let gameActive = false;
+let timeRemaining = DEFAULT_GAME_DURATION;
+let songDuration = DEFAULT_GAME_DURATION;
+let goalObject = null;
+let gameStatusDisplay; // For UI messages
+let timerDisplay; // For UI timer
 
 // --- Basic Setup ---
 const scene = new THREE.Scene();
@@ -29,25 +41,8 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 
 // --- Controls ---
-// const orbitControls = new OrbitControls(camera, renderer.domElement);
-// orbitControls.enableDamping = true;
-// orbitControls.dampingFactor = 0.05;
-// orbitControls.autoRotate = false;
-// orbitControls.autoRotateSpeed = 1.0;
-
-let playerControls;
-const moveState = {
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-    up: false, // For potential fly mode/jumping
-    down: false
-};
-const playerVelocity = new THREE.Vector3();
-const playerDirection = new THREE.Vector3();
-const playerMoveSpeed = 50.0; // Adjusted speed for noticeable movement
-const playerLookSpeed = 2.0; // Not directly used by PointerLockControls, but good to have
+// const orbitControls = new OrbitControls(camera, renderer.domElement); // Not used for player game
+let playerController;
 
 
 // --- GUI ---
@@ -231,6 +226,12 @@ const ScreenDistortionShader = {
 const screenDistortionPass = new ShaderPass(ScreenDistortionShader);
 composer.addPass(screenDistortionPass);
 
+// Mandelbrot Shader Pass
+const mandelbrotPass = new ShaderPass(MandelbrotShader);
+mandelbrotPass.uniforms.resolution.value.x = window.innerWidth;
+mandelbrotPass.uniforms.resolution.value.y = window.innerHeight;
+composer.addPass(mandelbrotPass);
+
 
 // Add FXAA last for best results
 composer.addPass(fxaaPass);
@@ -253,8 +254,9 @@ pointLight2.position.set(10, 15, -10);
 scene.add(pointLight2);
 
 // --- Initial State ---
-camera.position.set(GRID_SIZE * 0.7, GRID_SIZE * 0.7, GRID_SIZE * 1.2); // Adjust camera based on grid size, pull back slightly
-camera.lookAt(0, 0, 0);
+// Camera position is now handled by PlayerController or game setup
+// camera.position.set(GRID_SIZE * 0.7, GRID_SIZE * 0.7, GRID_SIZE * 1.2);
+// camera.lookAt(0, 0, 0);
 
 // --- Global Settings & Audio/Camera Control ---
 const settings = {
@@ -267,26 +269,34 @@ const settings = {
     // autoRotateSpeed: orbitControls.autoRotateSpeed, // orbitControls is disabled
     // globalBackgroundColor: scene.background.getHex(), // Moved to backgroundSettings
     // Post Processing Settings
-    bloomStrength: bloomPass.strength,
-    bloomThreshold: bloomPass.threshold,
-    bloomRadius: bloomPass.radius,
+    bloomStrength: 1.0, // Adjusted default
+    bloomThreshold: 0.5, // Adjusted default
+    bloomRadius: 0.5,  // Adjusted default
     bloomEnabled: true,
-    pixelateEnabled: true,
+    pixelateEnabled: false, // Adjusted default for gameplay
     fxaaEnabled: true,
-    pixelSize: pixelatePass.uniforms.pixelSize.value,
+    pixelSize: 6, // Adjusted default
     // New post-processing effects settings
-    filmGrainEnabled: true,
+    filmGrainEnabled: true, // Kept, is subtle
     filmGrainIntensity: filmGrainPass.uniforms.intensity.value,
     filmGrainSpeed: filmGrainPass.uniforms.speed.value,
-    scanlinesEnabled: true,
+    scanlinesEnabled: true, // Kept, is subtle
     scanlinesIntensity: scanlinesPass.uniforms.intensity.value,
     scanlinesCount: scanlinesPass.uniforms.count.value,
     scanlinesSpeed: scanlinesPass.uniforms.speed.value,
     // Screen Distortion Settings
-    screenDistortionEnabled: false, // Disabled by default
-    screenDistortionType: 'None', // 'None', 'Barrel', 'Pinch' (Wave could be added later)
+    screenDistortionEnabled: false, // Stays disabled by default
+    screenDistortionType: 'None',
     screenDistortionIntensity: screenDistortionPass.uniforms.intensity.value,
     screenDistortionPower: screenDistortionPass.uniforms.power.value,
+    // Mandelbrot Settings
+    mandelbrotEnabled: false, // Adjusted default for gameplay
+    mandelbrotZoom: mandelbrotPass.uniforms.zoom.value,
+    mandelbrotPanX: mandelbrotPass.uniforms.panX.value,
+    mandelbrotPanY: mandelbrotPass.uniforms.panY.value,
+    mandelbrotMaxIterations: 50, // Adjusted default
+    mandelbrotColorPalette: mandelbrotPass.uniforms.colorPaletteType.value,
+    mandelbrotMixFactor: 0.2, // Adjusted default
     // Instance Management Functions (bound to GUI)
     addGrid: () => objectManager.addInstance('grid'),
     addPointCloud: () => objectManager.addInstance('pointcloud'),
@@ -659,6 +669,18 @@ scanlinesFolder.add(settings, 'scanlinesCount', 50, 1000).step(10).name("Count")
 scanlinesFolder.add(settings, 'scanlinesSpeed', 0, 1).step(0.01).name("Speed").onChange(val => scanlinesPass.uniforms.speed.value = val);
 // scanlinesFolder.open();
 
+// Mandelbrot Controls
+const mandelbrotFolder = ppFolder.addFolder('Mandelbrot Fractal');
+mandelbrotFolder.add(settings, 'mandelbrotEnabled').name("Enable").onChange(val => mandelbrotPass.enabled = val);
+mandelbrotFolder.add(settings, 'mandelbrotZoom', 0.01, 10.0).step(0.01).name("Zoom").onChange(val => mandelbrotPass.uniforms.zoom.value = val);
+mandelbrotFolder.add(settings, 'mandelbrotPanX', -2.0, 2.0).step(0.01).name("Pan X").onChange(val => mandelbrotPass.uniforms.panX.value = val);
+mandelbrotFolder.add(settings, 'mandelbrotPanY', -2.0, 2.0).step(0.01).name("Pan Y").onChange(val => mandelbrotPass.uniforms.panY.value = val);
+mandelbrotFolder.add(settings, 'mandelbrotMaxIterations', 10, 500).step(10).name("Iterations").onChange(val => mandelbrotPass.uniforms.maxIterations.value = val);
+mandelbrotFolder.add(settings, 'mandelbrotColorPalette', { Grayscale: 0, Psychedelic: 1, Smooth: 2 }).name("Palette")
+    .onChange(val => mandelbrotPass.uniforms.colorPaletteType.value = parseInt(val));
+mandelbrotFolder.add(settings, 'mandelbrotMixFactor', 0.0, 1.0).step(0.01).name("Mix Factor").onChange(val => mandelbrotPass.uniforms.mixFactor.value = val);
+// mandelbrotFolder.open();
+
 
 // Instance Management Folder
 const instanceManagement = gui.addFolder('Instances');
@@ -840,66 +862,24 @@ document.getElementById('videoInput').addEventListener('change', async (e) => {
 });
 
 
-// Interaction listeners are now handled within ObjectManager.js
+// Interaction listeners are now handled within ObjectManager.js (for object selection)
+// Player movement input is handled by PlayerController.js
 
-// --- Player Controls Setup ---
-function setupPlayerControls() {
-    playerControls = new PointerLockControls(camera, renderer.domElement);
-    scene.add(playerControls.getObject()); // Add camera to scene as it's controlled by PointerLockControls
+// --- Player Controller Setup ---
+function setupPlayerController() {
+    // Ensure instructions div exists for PlayerController to use or create
+    let instructionsDiv = document.getElementById('instructions');
+    if (!instructionsDiv) {
+        instructionsDiv = document.createElement('div');
+        instructionsDiv.id = 'instructions'; // PlayerController might look for this ID
+        // PlayerController will set its own styles and content if it creates it
+        document.body.appendChild(instructionsDiv);
+    }
 
-    // Instructions and Pointer Lock Activation
-    const instructions = document.createElement('div');
-    instructions.id = 'instructions';
-    instructions.style.position = 'absolute';
-    instructions.style.top = '50%';
-    instructions.style.left = '50%';
-    instructions.style.transform = 'translate(-50%, -50%)';
-    instructions.style.color = 'white';
-    instructions.style.fontSize = '24px';
-    instructions.style.textAlign = 'center';
-    instructions.style.backgroundColor = 'rgba(0,0,0,0.7)';
-    instructions.style.padding = '20px';
-    instructions.style.cursor = 'pointer';
-    instructions.innerHTML = 'Click to Play<br>(W,A,S,D = Move, MOUSE = Look)';
-    document.body.appendChild(instructions);
-
-    instructions.addEventListener('click', () => {
-        playerControls.lock();
-    });
-
-    playerControls.addEventListener('lock', () => {
-        instructions.style.display = 'none';
-        // Hide GUI when pointer is locked for immersive gameplay
-        guiContainer.style.display = 'none';
-    });
-
-    playerControls.addEventListener('unlock', () => {
-        instructions.style.display = 'block';
-        // Show GUI when pointer is unlocked
-        guiContainer.style.display = 'block';
-    });
-
-    // Keyboard listeners for movement
-    document.addEventListener('keydown', (event) => {
-        switch (event.code) {
-            case 'KeyW': moveState.forward = true; break;
-            case 'KeyS': moveState.backward = true; break;
-            case 'KeyA': moveState.left = true; break;
-            case 'KeyD': moveState.right = true; break;
-            // case 'Space': moveState.up = true; break; // Optional jump/fly
-            // case 'ShiftLeft': moveState.down = true; break; // Optional crouch/fly
-        }
-    });
-    document.addEventListener('keyup', (event) => {
-        switch (event.code) {
-            case 'KeyW': moveState.forward = false; break;
-            case 'KeyS': moveState.backward = false; break;
-            case 'KeyA': moveState.left = false; break;
-            case 'KeyD': moveState.right = false; break;
-            // case 'Space': moveState.up = false; break;
-            // case 'ShiftLeft': moveState.down = false; break;
-        }
-    });
+    playerController = new PlayerController(camera, renderer.domElement, scene, new THREE.Vector3(0, 1.8, 25)); // Added scene
+    // The PlayerController adds its own camera object to the scene via its internal logic if needed,
+    // or directly manipulates the passed camera.
+    // The PlayerController handles its own pointer lock and input listeners.
 }
 
 
@@ -910,6 +890,9 @@ window.addEventListener('resize', () => {
     composer.setSize(window.innerWidth, window.innerHeight);
     pixelatePass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
     fxaaPass.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
+    if (mandelbrotPass) { // Check if mandelbrotPass is initialized
+        mandelbrotPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+    }
 });
 
 // --- Core Logic Functions ---
@@ -1014,7 +997,7 @@ function updateBackground() {
                     backgroundSettings.skyboxPathPosY, backgroundSettings.skyboxPathNegY,
                     backgroundSettings.skyboxPathPosZ, backgroundSettings.skyboxPathNegZ
                 ], () => {
-                    console.log("Skybox loaded successfully.");
+                    // console.log("Skybox loaded successfully."); // Cleanup
                 }, undefined, (err) => {
                     console.error("Error loading skybox:", err);
                     // Fallback to solid color on error
@@ -1041,7 +1024,7 @@ function updateBackground() {
                         const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
                         backgroundSettings.skydome = new THREE.Mesh(geometry, material);
                         scene.add(backgroundSettings.skydome);
-                        console.log("Background image loaded and skydome created.");
+                        // console.log("Background image loaded and skydome created."); // Cleanup
                     },
                     undefined,
                     (err) => {
@@ -1095,6 +1078,11 @@ function animate(timestamp) {
     if (scanlinesPass.enabled) {
         scanlinesPass.uniforms.time.value += deltaTime;
     }
+    if (mandelbrotPass.enabled) {
+        mandelbrotPass.uniforms.time.value += deltaTime;
+        // Update resolution in case of resize, though resize listener also handles it
+        mandelbrotPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+    }
 
     // --- Global Effects (Camera FOV) ---
     if (audioSettings.source !== 'None' && audioManager.audioContext) { // Check audio context exists
@@ -1111,138 +1099,220 @@ function animate(timestamp) {
     // --- Update each managed object ---
     objectManager.instances.forEach(instance => {
         const instanceSettings = instance.userData.settings;
+        const instanceType = instanceSettings.type;
 
         // Apply Auto-Rotation (if enabled) - BEFORE updating geometry
         if (instanceSettings.autoRotate) {
             instance.rotation.x += instanceSettings.rotationSpeed.x * deltaTime;
             instance.rotation.y += instanceSettings.rotationSpeed.y * deltaTime;
             instance.rotation.z += instanceSettings.rotationSpeed.z * deltaTime;
-            // Keep the settings rotation Euler in sync if auto-rotating
-            // This prevents the TransformControls from fighting the auto-rotation visually
-            // when the object is selected.
             instanceSettings.rotation.copy(instance.rotation);
         }
 
-        // Update geometry based on audio/motion
-        objectManager.updateObject(instance, audioManager, motionScore, cameraSettings);
+        // Update geometry based on audio/motion ONLY for non-platform objects
+        // or if specifically enabled for platforms (not currently the case)
+        if (instanceType !== 'platform' && instanceType !== 'platform_start' && instanceType !== 'platform_goal') {
+            // motionScore is already 0 if camera features are not active.
+            objectManager.updateObject(instance, audioManager, motionScore, cameraSettings);
+        }
     });
 
-    // orbitControls.update(); // OrbitControls is disabled
-    if (playerControls && playerControls.isLocked) {
-        playerDirection.z = Number(moveState.forward) - Number(moveState.backward);
-        playerDirection.x = Number(moveState.left) - Number(moveState.right);
-        playerDirection.normalize(); // this ensures consistent movements in all directions
+    // orbitControls.update(); // OrbitControls is disabled (not used in game mode)
 
-        const speedDelta = playerMoveSpeed * deltaTime;
-
-        if (moveState.forward || moveState.backward) {
-            playerVelocity.z -= playerDirection.z * speedDelta * 10;
-        }
-        if (moveState.left || moveState.right) {
-            playerVelocity.x -= playerDirection.x * speedDelta * 10;
-        }
-
-        // Apply movement
-        playerControls.moveRight(-playerVelocity.x * deltaTime);
-        playerControls.moveForward(-playerVelocity.z * deltaTime);
-
-        // Simple damping
-        playerVelocity.x *= 0.9;
-        playerVelocity.z *= 0.9;
-
-
-        // Ensure camera stays at a certain height (e.g. player height)
-        // This might be adjusted or made more sophisticated later with collision detection.
-        // playerControls.getObject().position.y = 2;
+    // Update Player Controller
+    if (playerController) {
+        playerController.update(deltaTime);
     }
 
+    // --- Game Logic (Timer, Win/Loss) ---
+    if (gameActive) {
+        timeRemaining -= deltaTime;
+        if (timerDisplay) {
+            timerDisplay.textContent = `Time: ${Math.max(0, timeRemaining).toFixed(1)}s`;
+        }
+
+        // Check for win condition
+        if (goalObject && playerController) {
+            const playerPos = playerController.getPosition();
+            // Simple proximity check to goal center for now
+            // A more robust check would use bounding box intersection
+            const goalPos = goalObject.position;
+            const distanceToGoal = playerPos.distanceTo(goalPos);
+            const goalProximityThreshold = (goalObject.geometry.parameters.width + goalObject.geometry.parameters.depth) / 4 + playerController.playerRadius;
+
+
+            if (distanceToGoal < goalProximityThreshold) {
+                gameWin();
+            }
+        }
+
+        // Check for lose condition
+        if (timeRemaining <= 0) {
+            gameLose();
+        }
+    }
 
     composer.render(); // Render scene with post-processing
 }
 
+
+// --- Game Control Functions ---
+function startGame() {
+    console.log("Attempting to start game...");
+    if (audioManager && audioManager.audioBuffer) {
+        songDuration = audioManager.audioBuffer.duration;
+        console.log("Song loaded, duration:", songDuration);
+    } else {
+        songDuration = DEFAULT_GAME_DURATION;
+        console.log("No song loaded, using default duration:", songDuration);
+    }
+    timeRemaining = songDuration;
+    gameActive = true;
+    if (gameStatusDisplay) gameStatusDisplay.textContent = '';
+    if (timerDisplay) timerDisplay.style.display = 'block';
+
+    // Ensure audio plays if loaded
+    if (audioManager.audioBuffer && !audioManager.isPlaying) {
+        audioManager.play();
+    }
+    console.log("Game started. Time remaining:", timeRemaining);
+}
+
+function gameWin() {
+    if (!gameActive) return;
+    console.log("Game Win!");
+    gameActive = false;
+    if (gameStatusDisplay) gameStatusDisplay.textContent = 'GOAL REACHED!';
+    // Potentially stop player movement, show cursor, etc.
+    if (playerController && playerController.isLocked) {
+         document.exitPointerLock(); // Release pointer lock
+    }
+}
+
+function gameLose() {
+    if (!gameActive) return;
+    console.log("Game Lose - Time Up!");
+    gameActive = false;
+    if (gameStatusDisplay) gameStatusDisplay.textContent = 'TIME UP!';
+    if (playerController && playerController.isLocked) {
+        document.exitPointerLock();
+    }
+}
+
+
 // --- Initialization ---
-setupPlayerControls(); // Initialize player controls
+const gameCollidables = []; // Initialize here, before player controller setup
 
-// Create a basic static level
-const groundGrid = objectManager.addInstance('grid');
-if (groundGrid) {
-    // Make the ground grid larger and flatter for a level
-    groundGrid.scale.set(5, 5, 1); // Scale it up (assuming default grid size is 15, so 75x75 units)
-    groundGrid.position.y = 0; // Ensure it's at ground level
+// UI Element References
+timerDisplay = document.getElementById('timerDisplay');
+gameStatusDisplay = document.getElementById('gameStatusDisplay');
+if (!timerDisplay) {
+    console.warn("UI element #timerDisplay not found. Creating one.");
+    timerDisplay = document.createElement('div');
+    timerDisplay.id = 'timerDisplay';
+    timerDisplay.style.cssText = "position: absolute; top: 10px; left: 10px; color: white; font-size: 24px; background: rgba(0,0,0,0.5); padding: 5px;";
+    document.body.appendChild(timerDisplay);
+}
+if (!gameStatusDisplay) {
+    console.warn("UI element #gameStatusDisplay not found. Creating one.");
+    gameStatusDisplay = document.createElement('div');
+    gameStatusDisplay.id = 'gameStatusDisplay';
+    gameStatusDisplay.style.cssText = "position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: yellow; font-size: 48px; background: rgba(0,0,0,0.7); padding: 20px; display: block; text-align: center;";
+    document.body.appendChild(gameStatusDisplay);
+    gameStatusDisplay.textContent = ''; // Initially hidden by no text
+}
+timerDisplay.style.display = 'none'; // Hide timer initially
 
-    const groundSettings = groundGrid.userData.settings;
-    groundSettings.wireframe = true;
-    groundSettings.heightScale = 0.2; // Flatter ground
-    groundSettings.lowColor.setHex(0x222222); // Dark grey
-    groundSettings.midColor.setHex(0x333333); // Medium grey
-    groundSettings.highColor.setHex(0x444444); // Light grey
-    // The grid's default rotation (Math.PI / 2 on X) is correct for a floor.
+
+setupPlayerController(); // Initialize new player controller
+
+// --- Procedural Level Generation ---
+const levelGenerator = new LevelGenerator({
+    startPosition: new THREE.Vector3(0, 2, 0) // Start slightly above origin y=0
+});
+const levelData = levelGenerator.generateLevel();
+
+levelData.forEach(objData => {
+    let platformInstance;
+    // For now, all generated objects are treated as 'sphere' for simple collidable boxes by ObjectManager
+    // This is a placeholder. Ideally, ObjectManager would have a 'box' or 'platform' template.
+    // Or LevelGenerator produces data that ObjectManager can directly use to create custom THREE.Mesh with BoxGeometry.
+
+    // Using 'sphere' template as a stand-in for generic box object creation via ObjectManager
+    // We will override its geometry and settings.
+    // A more robust solution would be to add a 'box' type to ObjectManager or allow direct mesh creation.
+    if (objData.type === 'platform_start' || objData.type === 'platform' || objData.type === 'platform_goal') {
+        // Create a generic object (e.g. sphere) and then customize it.
+        // This is a workaround as ObjectManager is geared towards its predefined types.
+        platformInstance = objectManager.addInstance('sphere'); // Use sphere as a base
+        if (platformInstance) {
+            // Dispose of the default sphere geometry and create a box
+            platformInstance.geometry.dispose();
+            platformInstance.geometry = new THREE.BoxGeometry(objData.size.x, objData.size.y, objData.size.z);
+
+            platformInstance.position.copy(objData.position);
+
+            // Update settings in userData
+            const settings = platformInstance.userData.settings;
+            settings.type = objData.type; // Store the actual type
+            if (objData.color) {
+                settings.lowColor.set(objData.color); // Use lowColor to set a uniform color for now
+                settings.midColor.set(objData.color);
+                settings.highColor.set(objData.color);
+            }
+            settings.wireframe = false; // Ensure platforms are solid
+            settings.materialType = objData.materialType || 'MeshPhongMaterial';
+            objectManager._updateInstanceMaterial(platformInstance, settings.materialType);
+
+
+            if (objData.isGoal) {
+                platformInstance.userData.isGoal = true; // Mark the goal object
+                // Make goal visually distinct (e.g., emissive)
+                if (platformInstance.material.emissive) {
+                    platformInstance.material.emissive.setHex(0xccaa00);
+                }
+            }
+
+            gameCollidables.push(platformInstance);
+            if (objData.isGoal) {
+                goalObject = platformInstance; // Store the goal object
+                // console.log("Goal platform identified:", goalObject); // Cleanup: Useful for debugging, but can be noisy
+            }
+        }
+    }
+});
+
+// Set player start position based on the first platform
+if (levelData.length > 0 && playerController) {
+    const startPlatformPos = levelData[0].position;
+    const startPlatformSize = levelData[0].size;
+    playerController.setPosition(
+        startPlatformPos.x,
+        startPlatformPos.y + startPlatformSize.y / 2 + playerController.playerHeight / 2, // Position on top of platform
+        startPlatformPos.z
+    );
+    // Attempt to start the game after level generation and player positioning
+    startGame();
+
+} else if (playerController) {
+    // Default start position if level generation fails or is empty
+    playerController.setPosition(0, playerController.playerHeight, 10);
+    startGame(); // Still attempt to start game with a default setup
 }
 
-const sphere = objectManager.addInstance('sphere');
-if (sphere) {
-    sphere.position.set(10, 5, -15); // Position it in the scene
-    const sphereSettings = sphere.userData.settings;
-    sphereSettings.radius = 4;
-    sphereSettings.lowColor.setHex(0xff4444); // Reddish
-    sphereSettings.midColor.setHex(0xff8844);
-    sphereSettings.highColor.setHex(0xffcc44);
-    objectManager.resetObjectInitialGeometry(sphere); // Apply radius change
+
+// Remove old static level (already done by commenting out above, this is just a note)
+// const groundGrid = objectManager.addInstance('grid'); ...
+// const sphere = objectManager.addInstance('sphere'); ...
+// const torusKnot = objectManager.addInstance('torusknot'); ...
+// const pointCloudObj = objectManager.addInstance('pointcloud'); ...
+
+if (playerController) {
+    playerController.setCollidables(gameCollidables);
 }
-
-const torusKnot = objectManager.addInstance('torusknot');
-if (torusKnot) {
-    torusKnot.position.set(-15, 7, -10);
-    const tkSettings = torusKnot.userData.settings;
-    tkSettings.radius = 5;
-    tkSettings.tube = 1.8;
-    tkSettings.lowColor.setHex(0x4444ff); // Bluish
-    tkSettings.midColor.setHex(0x6666ff);
-    tkSettings.highColor.setHex(0x8888ff);
-    objectManager.resetObjectInitialGeometry(torusKnot); // Apply geometry changes
-}
-
-const pointCloudObj = objectManager.addInstance('pointcloud'); // Renamed to avoid conflict
-if (pointCloudObj) {
-    pointCloudObj.position.set(0, 12, 10);
-    const pcSettings = pointCloudObj.userData.settings;
-    pcSettings.particleCount = 8000;
-    pcSettings.distributionScale = 20;
-    pcSettings.particleSize = 0.25;
-    pcSettings.lowColor.setHex(0x44ff44); // Greenish
-    pcSettings.midColor.setHex(0x88ff88);
-    pcSettings.highColor.setHex(0xccffcc);
-    objectManager.resetObjectInitialGeometry(pointCloudObj); // Apply changes
-}
-
-// Adjust player starting position and orientation
-camera.position.set(0, 1.8, 25); // Start a bit above ground, looking towards origin (player height ~1.8)
-playerControls.getObject().position.copy(camera.position); // Sync PointerLockControls position
-// Optional: Make the player look towards the center or a specific object.
-// playerControls.getObject().lookAt(0, 1.8, 0); // Look at origin at player height
-
-// --- Basic Collision Detection Data ---
-const playerHeight = 1.8;
-const playerColliderRadius = 0.5; // Approximate player as a cylinder/capsule
-const groundBoundary = (GRID_SIZE * 5) / 2 - playerColliderRadius; // Ground grid was scaled by 5
-
-// Store collidable objects and their AABBs
-const collidableObjects = [];
-
-if (sphere) {
-    const sphereRadius = sphere.userData.settings.radius;
-    const sphereBox = new THREE.Box3().setFromObject(sphere); // Use THREE.Box3 to get AABB
-    collidableObjects.push({ mesh: sphere, boundingBox: sphereBox });
-}
-if (torusKnot) {
-    const tkBox = new THREE.Box3().setFromObject(torusKnot);
-    collidableObjects.push({ mesh: torusKnot, boundingBox: tkBox });
-}
-// Point clouds are not typically solid colliders, so we'll omit pointCloudObj for now.
-
 
 objectManager.setupTransformControls(camera, renderer, null /* orbitControls is removed */);
-// ObjectManager's transform controls will be disabled for now as per plan
+// ObjectManager's transform controls will be disabled for game play
 if (objectManager.transformControls) {
     objectManager.transformControls.enabled = false;
     objectManager.transformControls.visible = false;
